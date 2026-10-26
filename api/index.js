@@ -81604,6 +81604,33 @@ var AiExtractionError = class extends Error {
     this.name = "AiExtractionError";
   }
 };
+var InsufficientSessionDataError = class extends Error {
+  constructor(message = "\u0644\u0627 \u062A\u0648\u062C\u062F \u0628\u064A\u0627\u0646\u0627\u062A \u062C\u0644\u0633\u0629 \u0643\u0627\u0641\u064A\u0629 \u0641\u064A \u0627\u0644\u0646\u0635 \u0627\u0644\u0645\u062F\u062E\u0644. \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u0625\u062F\u062E\u0627\u0644 \u0646\u0635 \u0625\u0634\u0639\u0627\u0631 \u062C\u0644\u0633\u0629 \u0642\u0636\u0627\u0626\u064A\u0629 \u0635\u0627\u0644\u062D.") {
+    super(message);
+    this.name = "InsufficientSessionDataError";
+  }
+};
+function isNonJudicialOrNegated(message) {
+  const trimmed = message.trim();
+  if (/(?:ليست|ليس|غير|لا\s+تحتوي|ولا\s+تحتوي|لا\s+يوجد|بدون)\s+(?:رسالة\s+محكمة|قضية|جلسة|موعد)/i.test(trimmed)) {
+    return true;
+  }
+  const judicialKeywords = /(?:دعوى|قضية|جلسة|محكمة|صك|دائرة|مدعي|مدعى\s+عليه|حضور|موعد|استئناف|بداية|صلح|تنفيذ|مرافعة|نطق|حكم)/i;
+  if (!judicialKeywords.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+function hasSufficientSessionData(data) {
+  const hasCase = Boolean(data.case_number && data.case_number.trim().length > 0);
+  const hasCourt = Boolean(data.court && data.court.trim().length > 0);
+  const hasDate = Boolean(data.session_date_hijri && data.session_date_hijri.trim().length > 0);
+  const hasParties = Boolean(
+    data.plaintiff && data.plaintiff.trim().length > 0 || data.defendant && data.defendant.trim().length > 0
+  );
+  const hasTime = Boolean(data.session_time && data.session_time.trim().length > 0);
+  return hasCase || hasCourt && hasDate || hasCourt && hasParties || hasDate && hasTime;
+}
 function extractWithRules(message) {
   const result = {
     case_number: null,
@@ -81617,10 +81644,18 @@ function extractWithRules(message) {
     session_time: null,
     notes: null
   };
+  if (isNonJudicialOrNegated(message)) {
+    return result;
+  }
   const caseMatch = message.match(/(?:دعوى|قضية|طلب|ملف)?\s*(?:رقم|الرقم)[:\s]+([0-9\/\-]+)/);
   if (caseMatch) result.case_number = caseMatch[1].trim();
   const courtMatch = message.match(/(?:لدى\s+|في\s+)?(محكمة\s+[^\n،,.]+?(?=\s+الدائرة|\s+بين|\s+ضد|\s+بتاريخ|\s+يوم|[،,.\n]|$))/);
-  if (courtMatch) result.court = courtMatch[1].trim();
+  if (courtMatch) {
+    const candidate = courtMatch[1].trim();
+    if (!/(?:ليست|ليس|لا\s+تحتوي|ولا\s+تحتوي|غير|بدون|مرحباً|كيف\s+حالك|اختبار)/i.test(candidate)) {
+      result.court = candidate;
+    }
+  }
   const circuitMatch = message.match(/(?:الدائرة|دائرة)\s+([^\n،,.]+?(?=\s+بين|\s+ضد|\s+بتاريخ|\s+يوم|[،,.\n]|$))/);
   if (circuitMatch) result.court_circuit = `\u0627\u0644\u062F\u0627\u0626\u0631\u0629 ${circuitMatch[1].trim()}`;
   const plaintiffMatch = message.match(/(?:المدعي|المحيل|المستدعي)[:\s]+([^\n،,.]+?)(?=\s+و?(?:المدعى|المحال|المستدعى\s+ضده)|\s+ضد|\s+بتاريخ|\s+يوم|[،,.\n]|$)/);
@@ -81748,9 +81783,11 @@ async function analyzeCourtMessage(message, userId) {
       logger.info("Falling back to rule-based parser after invalid AI JSON");
       result = extractWithRules(message);
     }
-  } else {
-    logger.info("Using smart rule-based extraction engine");
-    result = extractWithRules(message);
+  }
+  if (isNonJudicialOrNegated(message) || !hasSufficientSessionData(result)) {
+    throw new InsufficientSessionDataError(
+      "\u0644\u0627 \u062A\u0648\u062C\u062F \u0628\u064A\u0627\u0646\u0627\u062A \u062C\u0644\u0633\u0629 \u0643\u0627\u0641\u064A\u0629 \u0641\u064A \u0627\u0644\u0646\u0635 \u0627\u0644\u0645\u062F\u062E\u0644. \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u0623\u0646 \u0627\u0644\u0646\u0635 \u064A\u062D\u062A\u0648\u064A \u0639\u0644\u0649 \u0631\u0642\u0645 \u0642\u0636\u064A\u0629 \u0623\u0648 \u0645\u062D\u0643\u0645\u0629 \u0623\u0648 \u0645\u0648\u0639\u062F \u062C\u0644\u0633\u0629."
+    );
   }
   if (userRecord && userId) {
     try {
@@ -81794,6 +81831,10 @@ router4.post(
       const extraction = await analyzeCourtMessage(parseResult.data.message, userId);
       res.json(extraction);
     } catch (err) {
+      if (err instanceof InsufficientSessionDataError) {
+        res.status(422).json({ error: err.message, isInsufficientData: true });
+        return;
+      }
       if (err instanceof AiExtractionError) {
         res.status(403).json({ error: err.message, isQuotaExceeded: true });
         return;
@@ -82022,7 +82063,14 @@ router5.get("/sessions", async (req, res) => {
 router5.post("/sessions", attachAuthUser, requireAuth, async (req, res) => {
   const parseResult = CreateSessionBody.safeParse(req.body);
   if (!parseResult.success) {
-    res.status(400).json({ error: "Invalid session data." });
+    res.status(400).json({ error: "\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062C\u0644\u0633\u0629 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629." });
+    return;
+  }
+  const { caseNumber, court, sessionDateHijri } = parseResult.data;
+  if (!caseNumber?.trim() || !court?.trim() || !sessionDateHijri?.trim()) {
+    res.status(400).json({
+      error: "\u0631\u0642\u0645 \u0627\u0644\u0642\u0636\u064A\u0629\u060C \u0627\u0644\u0645\u062D\u0643\u0645\u0629\u060C \u0648\u062A\u0627\u0631\u064A\u062E \u0627\u0644\u062C\u0644\u0633\u0629 \u062D\u0642\u0648\u0644 \u0625\u0644\u0632\u0627\u0645\u064A\u0629 \u0644\u062D\u0641\u0638 \u0627\u0644\u062C\u0644\u0633\u0629 \u0641\u064A \u0627\u0644\u0646\u0638\u0627\u0645."
+    });
     return;
   }
   try {

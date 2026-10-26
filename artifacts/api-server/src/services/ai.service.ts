@@ -14,6 +14,43 @@ export class AiExtractionError extends Error {
   }
 }
 
+export class InsufficientSessionDataError extends Error {
+  constructor(message = "لا توجد بيانات جلسة كافية في النص المدخل. يرجى التأكد من إدخال نص إشعار جلسة قضائية صالح.") {
+    super(message);
+    this.name = "InsufficientSessionDataError";
+  }
+}
+
+/** Checks whether a message is explicitly non-judicial or negated */
+export function isNonJudicialOrNegated(message: string): boolean {
+  const trimmed = message.trim();
+  // Check explicit negation phrases
+  if (/(?:ليست|ليس|غير|لا\s+تحتوي|ولا\s+تحتوي|لا\s+يوجد|بدون)\s+(?:رسالة\s+محكمة|قضية|جلسة|موعد)/i.test(trimmed)) {
+    return true;
+  }
+  // Check if message lacks any legal/judicial keywords
+  const judicialKeywords = /(?:دعوى|قضية|جلسة|محكمة|صك|دائرة|مدعي|مدعى\s+عليه|حضور|موعد|استئناف|بداية|صلح|تنفيذ|مرافعة|نطق|حكم)/i;
+  if (!judicialKeywords.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+/** Checks whether extracted data has minimum required fields to constitute a court session */
+export function hasSufficientSessionData(data: SessionExtraction): boolean {
+  const hasCase = Boolean(data.case_number && data.case_number.trim().length > 0);
+  const hasCourt = Boolean(data.court && data.court.trim().length > 0);
+  const hasDate = Boolean(data.session_date_hijri && data.session_date_hijri.trim().length > 0);
+  const hasParties = Boolean(
+    (data.plaintiff && data.plaintiff.trim().length > 0) ||
+    (data.defendant && data.defendant.trim().length > 0)
+  );
+  const hasTime = Boolean(data.session_time && data.session_time.trim().length > 0);
+
+  // Must have case_number, or (court + date), or (court + parties), or (date + time)
+  return hasCase || (hasCourt && hasDate) || (hasCourt && hasParties) || (hasDate && hasTime);
+}
+
 /**
  * Smart rule-based Arabic court SMS extractor fallback.
  * Works immediately when an external AI provider key is not yet set or during network outages.
@@ -32,13 +69,23 @@ function extractWithRules(message: string): SessionExtraction {
     notes: null,
   };
 
+  if (isNonJudicialOrNegated(message)) {
+    return result;
+  }
+
   // Case Number: e.g. "دعوى رقم 1234/2026" or "قضية رقم 4521"
   const caseMatch = message.match(/(?:دعوى|قضية|طلب|ملف)?\s*(?:رقم|الرقم)[:\s]+([0-9\/\-]+)/);
   if (caseMatch) result.case_number = caseMatch[1].trim();
 
   // Court name: e.g. "محكمة بداية عمان" or "محكمة الاستئناف" or "محكمة صلح شمال عمان"
   const courtMatch = message.match(/(?:لدى\s+|في\s+)?(محكمة\s+[^\n،,.]+?(?=\s+الدائرة|\s+بين|\s+ضد|\s+بتاريخ|\s+يوم|[،,.\n]|$))/);
-  if (courtMatch) result.court = courtMatch[1].trim();
+  if (courtMatch) {
+    const candidate = courtMatch[1].trim();
+    // Validate candidate: must NOT contain negation words or casual conversational text
+    if (!/(?:ليست|ليس|لا\s+تحتوي|ولا\s+تحتوي|غير|بدون|مرحباً|كيف\s+حالك|اختبار)/i.test(candidate)) {
+      result.court = candidate;
+    }
+  }
 
   // Court Circuit: e.g. "الدائرة الخامسة" or "دائرة التنفيذ"
   const circuitMatch = message.match(/(?:الدائرة|دائرة)\s+([^\n،,.]+?(?=\s+بين|\s+ضد|\s+بتاريخ|\s+يوم|[،,.\n]|$))/);
@@ -207,10 +254,13 @@ export async function analyzeCourtMessage(
       logger.info("Falling back to rule-based parser after invalid AI JSON");
       result = extractWithRules(message);
     }
-  } else {
-    // Immediate smart rule-based fallback
-    logger.info("Using smart rule-based extraction engine");
-    result = extractWithRules(message);
+  }
+
+  // ── 3.5 Validate message semantic validity and extracted fields ─────────
+  if (isNonJudicialOrNegated(message) || !hasSufficientSessionData(result)) {
+    throw new InsufficientSessionDataError(
+      "لا توجد بيانات جلسة كافية في النص المدخل. يرجى التأكد من أن النص يحتوي على رقم قضية أو محكمة أو موعد جلسة."
+    );
   }
 
   // ── 4. Increment user usage and persist ──────────────────────────────────

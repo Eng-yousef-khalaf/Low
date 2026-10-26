@@ -58,7 +58,14 @@ router.get("/sessions", async (req, res) => {
 router.post("/sessions", attachAuthUser, requireAuth, async (req, res) => {
   const parseResult = CreateSessionBody.safeParse(req.body);
   if (!parseResult.success) {
-    res.status(400).json({ error: "Invalid session data." });
+    res.status(400).json({ error: "بيانات الجلسة غير صالحة." });
+    return;
+  }
+  const { caseNumber, court, sessionDateHijri } = parseResult.data;
+  if (!caseNumber?.trim() || !court?.trim() || !sessionDateHijri?.trim()) {
+    res.status(400).json({
+      error: "رقم القضية، المحكمة، وتاريخ الجلسة حقول إلزامية لحفظ الجلسة في النظام.",
+    });
     return;
   }
   try {

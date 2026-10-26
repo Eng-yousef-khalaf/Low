@@ -176,7 +176,7 @@ function deriveEffectiveStatus(storedStatus: string, hearingAt: string | null | 
 export default function DashboardPage() {
   const { data, isLoading, error } = useGetDashboardStats();
   const { data: currentUser } = useGetCurrentUser();
-  const { data: allSessions = [], isLoading: isLoadingSessions } = useListSessions();
+  const { data: allSessions = [], isLoading: isLoadingSessions, error: sessionsError, refetch: refetchSessions } = useListSessions();
   const [urgentTasks, setUrgentTasks] = useState<StoredTask[]>([]);
 
   // Load active urgent tasks from localStorage
@@ -219,12 +219,35 @@ export default function DashboardPage() {
     );
   }
 
+  const isAdmin = currentUser?.role === 'admin';
+  const isUnlimited = isAdmin || currentUser?.ai_quota_limit === -1 || currentUser?.plan_tier === 'unlimited';
   const aiUsed = currentUser?.ai_usage_count || 0;
-  const aiQuota = currentUser?.ai_quota_limit || 50;
-  const aiPercent = Math.min(100, Math.round((aiUsed / aiQuota) * 100));
+  const aiQuota = currentUser?.ai_quota_limit ?? 50;
+  const aiPercent = isUnlimited ? 100 : Math.min(100, Math.round((aiUsed / (aiQuota || 1)) * 100));
 
   return (
     <div className="p-6 lg:p-8 space-y-8">
+      {/* Session Data Fetch Failure Alert */}
+      {sessionsError && (
+        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 dark:text-amber-200 fade-in-up">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="text-xs">
+              <p className="font-bold">تعذر الاتصال بـ Google Sheets لجلب جلسات المحكمة</p>
+              <p className="text-muted-foreground mt-0.5">
+                مؤشرات القضايا والجلسات تظهر كـ «غير متاح» بدلاً من أرقام غير مؤكدة. الأقسام الأخرى (الوكالات، الأحكام، المهام) تعمل بشكل سليم ومستقل.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => refetchSessions()}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg border border-amber-500/40 hover:bg-amber-500/20 text-amber-900 dark:text-amber-200 cursor-pointer shrink-0"
+          >
+            إعادة محاولة الربط
+          </button>
+        </div>
+      )}
+
       {/* Subscription Expiration Reminder Banner (3 days or less) */}
       {currentUser?.subscriptionWarning && (
         <div className="rounded-2xl border border-amber-500/50 bg-amber-500/10 p-5 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2">
@@ -295,12 +318,21 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-sm text-foreground truncate">{currentUser.username}</span>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                    {currentUser.plan_tier === 'pro' ? 'باقة برو (Pro)' : 'باقة بلس (Plus)'}
+                    {isUnlimited ? 'باقة مفتوحة (مشرف)' : currentUser.plan_tier === 'pro' ? 'باقة برو (Pro)' : 'باقة بلس (Plus)'}
                   </span>
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
-                  <Database className="w-3 h-3 text-emerald-500" />
-                  <span>المزامنة الفورية مع Google Drive نشطة</span>
+                <p className="text-[11px] mt-0.5 flex items-center gap-1.5">
+                  {sessionsError ? (
+                    <>
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      <span className="text-amber-600 dark:text-amber-400 font-semibold">مزامنة Google Drive غير متصلة</span>
+                    </>
+                  ) : (
+                    <>
+                      <Database className="w-3 h-3 text-emerald-500 shrink-0" />
+                      <span className="text-muted-foreground">المزامنة مع Google Drive نشطة</span>
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -313,7 +345,7 @@ export default function DashboardPage() {
                   استهلاك استخراج الجلسات بالذكاء الاصطناعي
                 </span>
                 <span className="font-mono font-bold text-foreground">
-                  {aiUsed} / {aiQuota}
+                  {isUnlimited ? 'مفتوح (غير محدود)' : `${aiUsed} / ${aiQuota}`}
                 </span>
               </div>
               <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
@@ -321,12 +353,18 @@ export default function DashboardPage() {
                   className="h-full rounded-full transition-all duration-300"
                   style={{
                     width: `${aiPercent}%`,
-                    background: aiPercent >= 100 ? '#ef4444' : aiPercent >= 80 ? '#f59e0b' : '#B88A3B',
+                    background: isUnlimited
+                      ? 'linear-gradient(90deg, #10b981 0%, #059669 100%)'
+                      : aiPercent >= 100 ? '#ef4444' : aiPercent >= 80 ? '#f59e0b' : '#B88A3B',
                   }}
                 />
               </div>
               <p className="text-[10px] text-muted-foreground">
-                {aiPercent >= 100 ? '⚠️ نفد رصيد الذكاء الاصطناعي للشهر الحالي' : `متبقي ${aiQuota - aiUsed} عمليات استخراج`}
+                {isUnlimited
+                  ? '✨ باقة مفتوحة — عمليات استخراج غير محدودة'
+                  : aiPercent >= 100
+                  ? '⚠️ نفد رصيد الذكاء الاصطناعي للشهر الحالي'
+                  : `متبقي ${Math.max(0, aiQuota - aiUsed)} عمليات استخراج`}
               </p>
             </div>
 
@@ -349,6 +387,8 @@ export default function DashboardPage() {
         {stats.map((stat, i) => {
           const Icon = stat.icon;
           const value = (data as Record<string, number> | undefined)?.[stat.key];
+          const isSessionStat = ['totalCases', 'todayHearings', 'upcomingHearings', 'finishedHearings'].includes(stat.key);
+          const isUnavailable = isSessionStat && Boolean(sessionsError);
 
           return (
             <Link key={stat.key} href={stat.href}>
@@ -359,11 +399,15 @@ export default function DashboardPage() {
                   <div className={`w-11 h-11 rounded-xl ${stat.iconBg} flex items-center justify-center shadow-xs`}>
                     <Icon className={`w-5 h-5 ${stat.iconColor}`} />
                   </div>
-                  <div className={`w-2 h-2 rounded-full ${stat.dotColor} mt-1`} />
+                  <div className={`w-2 h-2 rounded-full ${isUnavailable ? 'bg-amber-500' : stat.dotColor} mt-1`} />
                 </div>
                 <div>
                   {isLoading ? (
                     <Skeleton className="h-9 w-16 mb-1" />
+                  ) : isUnavailable ? (
+                    <div className="text-lg font-bold font-sans text-amber-600 dark:text-amber-400 py-1" data-testid={`stat-${stat.key}`}>
+                      غير متاح
+                    </div>
                   ) : (
                     <div className="text-3xl font-extrabold font-mono tracking-tight text-slate-900 dark:text-foreground" data-testid={`stat-${stat.key}`}>
                       {value ?? 0}

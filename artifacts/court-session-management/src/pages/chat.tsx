@@ -72,13 +72,15 @@ export default function ChatPage() {
           refetchUser();
           toast({
             title: 'تم التحليل بنجاح',
-            description: 'تم استخراج البيانات. راجعها وعدّلها قبل الحفظ.',
+            description: 'تم استخراج بيانات الجلسة. راجعها وعدّلها قبل الحفظ.',
           });
         },
         onError: (error: any) => {
+          setExtractedData(null);
+          setFormData({});
           toast({
-            title: 'فشل التحليل',
-            description: error?.message || 'تعذّر تحليل الرسالة، حاول مرة أخرى',
+            title: 'لا توجد بيانات جلسة كافية',
+            description: error?.message || 'لا توجد بيانات جلسة كافية في النص المدخل. يرجى التأكد من إدخال نص إشعار جلسة قضائية صالح.',
             variant: 'destructive',
           });
         },
@@ -86,7 +88,22 @@ export default function ChatPage() {
     );
   };
 
+  const isSessionSavable = Boolean(
+    formData.caseNumber?.trim() &&
+    formData.court?.trim() &&
+    formData.sessionDateHijri?.trim()
+  );
+
   const handleSave = () => {
+    if (!isSessionSavable) {
+      toast({
+        title: 'بيانات الجلسة غير مكتملة',
+        description: 'يرجى تعبئة الحقول الأساسية: رقم القضية، المحكمة، وتاريخ الجلسة.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     createMutation.mutate(
       { data: formData },
       {
@@ -124,14 +141,14 @@ export default function ChatPage() {
   };
 
   const fields = [
-    { key: 'caseNumber', label: 'رقم القضية', dir: 'ltr' as const, mono: true },
-    { key: 'court', label: 'المحكمة', dir: 'rtl' as const },
+    { key: 'caseNumber', label: 'رقم القضية', dir: 'ltr' as const, mono: true, required: true },
+    { key: 'court', label: 'المحكمة', dir: 'rtl' as const, required: true },
     { key: 'plaintiff', label: 'المدّعي', dir: 'rtl' as const },
     { key: 'defendant', label: 'المدّعى عليه', dir: 'rtl' as const },
     { key: 'courtCircuit', label: 'الدائرة القضائية', dir: 'rtl' as const },
     { key: 'caseSubject', label: 'موضوع القضية', dir: 'rtl' as const },
     { key: 'sessionType', label: 'نوع الجلسة', dir: 'rtl' as const },
-    { key: 'sessionDateHijri', label: 'تاريخ الجلسة (ميلادي / هجري)', dir: 'ltr' as const, mono: true },
+    { key: 'sessionDateHijri', label: 'تاريخ الجلسة (ميلادي / هجري)', dir: 'ltr' as const, mono: true, required: true },
     { key: 'sessionTime', label: 'وقت الجلسة', dir: 'auto' as const, mono: true },
   ];
 
@@ -277,15 +294,19 @@ export default function ChatPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               {fields.map((f) => (
                 <div key={f.key} className="space-y-1.5">
-                  <Label htmlFor={f.key} className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    {f.label}
+                  <Label htmlFor={f.key} className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                    <span>{f.label}</span>
+                    {f.required && <span className="text-destructive font-bold">*</span>}
                   </Label>
                   <Input
                     id={f.key}
                     value={formData[f.key] || ''}
                     onChange={(e) => updateField(f.key, e.target.value)}
-                    className={`${f.mono ? 'font-mono' : ''} h-9 text-sm`}
+                    className={`${f.mono ? 'font-mono' : ''} h-9 text-sm ${f.required && !formData[f.key]?.trim() ? 'border-amber-500/40' : ''}`}
                     dir={f.dir}
+                    required={f.required}
+                    onInvalid={(e) => (e.target as HTMLInputElement).setCustomValidity('يرجى تعبئة هذا الحقل')}
+                    onInput={(e) => (e.target as HTMLInputElement).setCustomValidity('')}
                     data-testid={`input-${f.key}`}
                   />
                 </div>
@@ -307,16 +328,23 @@ export default function ChatPage() {
               />
             </div>
 
-            <Button
-              onClick={handleSave}
-              disabled={createMutation.isPending}
-              size="lg"
-              className="w-full gap-2 text-base font-bold h-12 shadow-sm"
-              data-testid="button-save"
-            >
-              <Save className="w-5 h-5" />
-              {createMutation.isPending ? 'جارٍ الحفظ في Google Sheets...' : 'حفظ الجلسة في Google Sheets'}
-            </Button>
+            <div className="space-y-2 pt-2">
+              <Button
+                onClick={handleSave}
+                disabled={createMutation.isPending || !isSessionSavable}
+                size="lg"
+                className="w-full gap-2 text-base font-bold h-12 shadow-sm cursor-pointer disabled:cursor-not-allowed"
+                data-testid="button-save"
+              >
+                <Save className="w-5 h-5" />
+                {createMutation.isPending ? 'جارٍ الحفظ في Google Sheets...' : 'حفظ الجلسة في Google Sheets'}
+              </Button>
+              {!isSessionSavable && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 text-center font-medium">
+                  ⚠️ الحقول المشار إليها بعلامة (*) إلزامية لتفعيل حفظ الجلسة (رقم القضية، المحكمة، وتاريخ الجلسة).
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}

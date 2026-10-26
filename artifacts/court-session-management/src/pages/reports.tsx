@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { useListSessions } from '@workspace/api-client-react';
-import { FileText, ChevronLeft, CheckCircle2, Clock, Scale, User, ArrowUpDown } from 'lucide-react';
+import { FileText, ChevronLeft, CheckCircle2, Clock, Scale, User, ArrowUpDown, AlertCircle, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { sortSessions, type SortOption } from '@/lib/session-sort';
 import { getArabicDayName } from '@/lib/hijri';
@@ -28,7 +29,7 @@ function deriveEffectiveStatus(storedStatus: string, hearingAt: string | null | 
 
 export default function ReportsPage() {
   const [sortBy, setSortBy] = useState<SortOption>('nearest');
-  const { data: sessions, isLoading, error } = useListSessions();
+  const { data: sessions, isLoading, error, refetch } = useListSessions();
 
   const sortedSessions = Array.isArray(sessions) ? sortSessions(sessions, sortBy) : [];
 
@@ -62,15 +63,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/8 p-4 flex items-center gap-3">
-          <div className="w-2 h-2 rounded-full bg-destructive shrink-0" />
-          <p className="text-sm text-destructive font-medium">فشل تحميل الجلسات</p>
-        </div>
-      )}
-
-      {/* Loading */}
+      {/* Content Rendering: Loading -> Error -> List -> Empty */}
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -85,6 +78,26 @@ export default function ReportsPage() {
               </div>
             </div>
           ))}
+        </div>
+      ) : error ? (
+        <div className="fade-in-up rounded-2xl border border-destructive/30 bg-destructive/8 p-8 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-destructive/15 text-destructive flex items-center justify-center mx-auto">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-destructive">فشل تحميل قائمة تقارير الجلسات</h3>
+            <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
+              تعذر الاتصال بـ Google Sheets لجلب بيانات الجلسات. يرجى التحقق من اتصال الشبكة وصلاحيات ملف الاعتماد ثم إعادة المحاولة.
+            </p>
+          </div>
+          <Button
+            onClick={() => refetch()}
+            variant="outline"
+            className="gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4" />
+            إعادة محاولة التحميل
+          </Button>
         </div>
       ) : sortedSessions.length > 0 ? (
         <div className="space-y-3 fade-in-up fade-in-up-delay-2">

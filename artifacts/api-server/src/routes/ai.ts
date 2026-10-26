@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { AnalyzeMessageBody } from "@workspace/api-zod";
-import { analyzeCourtMessage, AiExtractionError } from "../services/ai.service";
+import { analyzeCourtMessage, AiExtractionError, InsufficientSessionDataError } from "../services/ai.service";
 import { logger } from "../lib/logger";
 import { attachAuthUser, requireAuth, requireActiveSubscription } from "../middlewares/auth.middleware";
 
@@ -29,6 +29,10 @@ router.post(
       const extraction = await analyzeCourtMessage(parseResult.data.message, userId);
       res.json(extraction);
     } catch (err: any) {
+      if (err instanceof InsufficientSessionDataError) {
+        res.status(422).json({ error: err.message, isInsufficientData: true });
+        return;
+      }
       if (err instanceof AiExtractionError) {
         res.status(403).json({ error: err.message, isQuotaExceeded: true });
         return;

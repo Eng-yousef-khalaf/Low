@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ShieldCheck, Plus, Trash2, Calendar as CalendarIcon, Clock, User, FileKey, AlertTriangle, CheckCircle2, Search, Edit3, Sparkles, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import moment from 'moment-hijri';
@@ -39,35 +40,67 @@ export interface PowerOfAttorney {
 
 const LOCAL_KEY = 'legal_poa_records_v1';
 
+export type HijriDateValidation =
+  | { status: 'empty'; days: 0; message: string }
+  | { status: 'invalid'; days: 0; message: string }
+  | { status: 'valid'; days: number; message: string };
+
+/**
+ * Strictly parses and validates a Hijri date string (DD/MM/YYYY or YYYY/MM/DD).
+ * Returns 'invalid' for non-dates like 99/99/1448 instead of 0 days.
+ */
+export function parseAndValidateHijriDate(hijriDateStr: string): HijriDateValidation {
+  if (!hijriDateStr?.trim()) {
+    return { status: 'empty', days: 0, message: 'أدخل تاريخ الانتهاء' };
+  }
+  const parts = hijriDateStr.trim().split(/[\/\.-]/);
+  if (parts.length !== 3) {
+    return { status: 'invalid', days: 0, message: 'تاريخ غير صالح' };
+  }
+  let day: number, month: number, year: number;
+  if (parts[0].length === 4) {
+    year = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    day = parseInt(parts[2], 10);
+  } else {
+    day = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    year = parseInt(parts[2], 10);
+  }
+
+  if (isNaN(day) || isNaN(month) || isNaN(year)) {
+    return { status: 'invalid', days: 0, message: 'تاريخ غير صالح' };
+  }
+  if (day < 1 || day > 30 || month < 1 || month > 12 || year < 1300 || year > 1550) {
+    return { status: 'invalid', days: 0, message: 'تاريخ غير صالح' };
+  }
+
+  try {
+    const mExpiry = moment(`${year}/${month}/${day}`, 'iYYYY/iM/iD');
+    if (!mExpiry.isValid()) {
+      return { status: 'invalid', days: 0, message: 'تاريخ غير صالح' };
+    }
+    const days = mExpiry.diff(moment().startOf('day'), 'days');
+    let message = '';
+    if (days < 0) {
+      message = `منتهية (منذ ${Math.abs(days)} يوم)`;
+    } else if (days === 0) {
+      message = 'تنتهي اليوم (0 يوم)';
+    } else {
+      message = `${days} يوم متبقٍ`;
+    }
+    return { status: 'valid', days, message };
+  } catch {
+    return { status: 'invalid', days: 0, message: 'تاريخ غير صالح' };
+  }
+}
+
 /**
  * Calculates days remaining from a Hijri date string (DD/MM/YYYY).
  */
 function calculateDaysRemainingFromHijri(hijriDateStr: string): number {
-  if (!hijriDateStr?.trim()) return 0;
-  try {
-    const parts = hijriDateStr.trim().split(/[\/\.-]/);
-    if (parts.length === 3) {
-      let day: number, month: number, year: number;
-      if (parts[0].length === 4) {
-        year = parseInt(parts[0], 10);
-        month = parseInt(parts[1], 10);
-        day = parseInt(parts[2], 10);
-      } else {
-        day = parseInt(parts[0], 10);
-        month = parseInt(parts[1], 10);
-        year = parseInt(parts[2], 10);
-      }
-      if (year > 1300 && year < 1600 && month >= 1 && month <= 12 && day >= 1 && day <= 30) {
-        const mExpiry = moment(`${year}/${month}/${day}`, 'iYYYY/iM/iD');
-        if (mExpiry.isValid()) {
-          return mExpiry.diff(moment().startOf('day'), 'days');
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Failed to parse Hijri date', e);
-  }
-  return 0;
+  const result = parseAndValidateHijriDate(hijriDateStr);
+  return result.status === 'valid' ? result.days : 0;
 }
 
 /** Refresh remaining days on all records based on current date */
@@ -96,12 +129,12 @@ export default function PowerOfAttorneyPage() {
   const [poaNumber, setPoaNumber] = useState('');
   const [issueDateHijri, setIssueDateHijri] = useState('');
   const [expiryDateHijri, setExpiryDateHijri] = useState('');
-  const [calculatedDays, setCalculatedDays] = useState<number>(0);
+  const [expiryValidation, setExpiryValidation] = useState<HijriDateValidation>({ status: 'empty', days: 0, message: 'أدخل تاريخ الانتهاء' });
   const [notes, setNotes] = useState('');
 
   // Recalculate days live as user types expiry date
   useEffect(() => {
-    setCalculatedDays(expiryDateHijri.trim() ? calculateDaysRemainingFromHijri(expiryDateHijri) : 0);
+    setExpiryValidation(parseAndValidateHijriDate(expiryDateHijri));
   }, [expiryDateHijri]);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
@@ -161,7 +194,7 @@ export default function PowerOfAttorneyPage() {
     setPoaNumber('');
     setIssueDateHijri('');
     setExpiryDateHijri('');
-    setCalculatedDays(0);
+    setExpiryValidation({ status: 'empty', days: 0, message: 'أدخل تاريخ الانتهاء' });
     setNotes('');
     setEditingRecord(null);
   };
@@ -173,7 +206,7 @@ export default function PowerOfAttorneyPage() {
       setPoaNumber(record.poaNumber);
       setIssueDateHijri(record.issueDateHijri);
       setExpiryDateHijri(record.expiryDateHijri);
-      setCalculatedDays(calculateDaysRemainingFromHijri(record.expiryDateHijri));
+      setExpiryValidation(parseAndValidateHijriDate(record.expiryDateHijri));
       setNotes(record.notes || '');
     } else {
       resetForm();
@@ -188,6 +221,28 @@ export default function PowerOfAttorneyPage() {
     if (!clientName.trim() || !poaNumber.trim()) {
       toast({ title: 'تنبيه', description: 'يرجى تعبئة اسم العميل ورقم الوكالة.', variant: 'destructive' });
       return;
+    }
+    if (expiryDateHijri.trim()) {
+      const val = parseAndValidateHijriDate(expiryDateHijri);
+      if (val.status === 'invalid') {
+        toast({
+          title: 'تاريخ غير صالح',
+          description: 'تاريخ الانتهاء الهجري غير صالح. يرجى إدخال تاريخ صحيح مثل (10/01/1448).',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+    if (issueDateHijri.trim()) {
+      const issueVal = parseAndValidateHijriDate(issueDateHijri);
+      if (issueVal.status === 'invalid') {
+        toast({
+          title: 'تاريخ غير صالح',
+          description: 'تاريخ الإصدار الهجري غير صالح. يرجى إدخال تاريخ صحيح مثل (10/01/1445).',
+          variant: 'destructive',
+        });
+        return;
+      }
     }
     setIsSaving(true);
     const days = calculateDaysRemainingFromHijri(expiryDateHijri);
@@ -338,41 +393,48 @@ export default function PowerOfAttorneyPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Client Name */}
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-xs font-semibold flex items-center gap-1">
+                    <Label htmlFor="poa-client-name" className="text-xs font-semibold flex items-center gap-1">
                       <User className="w-3.5 h-3.5 text-muted-foreground" />
-                      اسم العميل <span className="text-rose-500">*</span>
-                    </label>
+                      <span>اسم العميل</span> <span className="text-rose-500">*</span>
+                    </Label>
                     <Input
+                      id="poa-client-name"
                       placeholder="مثال: شركة الحلول القانونية / محمد أحمد"
                       value={clientName}
                       onChange={(e) => setClientName(e.target.value)}
                       required
+                      onInvalid={(e) => (e.target as HTMLInputElement).setCustomValidity('يرجى تعبئة هذا الحقل')}
+                      onInput={(e) => (e.target as HTMLInputElement).setCustomValidity('')}
                     />
                   </div>
 
                   {/* POA Number */}
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-xs font-semibold flex items-center gap-1">
+                    <Label htmlFor="poa-number" className="text-xs font-semibold flex items-center gap-1">
                       <FileKey className="w-3.5 h-3.5 text-muted-foreground" />
-                      رقم الوكالة <span className="text-rose-500">*</span>
-                    </label>
+                      <span>رقم الوكالة</span> <span className="text-rose-500">*</span>
+                    </Label>
                     <Input
+                      id="poa-number"
                       placeholder="مثال: 44589210"
                       value={poaNumber}
                       onChange={(e) => setPoaNumber(e.target.value)}
                       className="font-mono text-left"
                       dir="ltr"
                       required
+                      onInvalid={(e) => (e.target as HTMLInputElement).setCustomValidity('يرجى تعبئة هذا الحقل')}
+                      onInput={(e) => (e.target as HTMLInputElement).setCustomValidity('')}
                     />
                   </div>
 
                   {/* Issue Date */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold flex items-center gap-1">
+                    <Label htmlFor="poa-issue-date" className="text-xs font-semibold flex items-center gap-1">
                       <CalendarIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                      تاريخ الإصدار (هجري)
-                    </label>
+                      <span>تاريخ الإصدار (هجري)</span>
+                    </Label>
                     <Input
+                      id="poa-issue-date"
                       placeholder="مثال: 10/01/1445"
                       value={issueDateHijri}
                       onChange={(e) => setIssueDateHijri(e.target.value)}
@@ -382,11 +444,12 @@ export default function PowerOfAttorneyPage() {
 
                   {/* Expiry Date */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold flex items-center gap-1">
+                    <Label htmlFor="poa-expiry-date" className="text-xs font-semibold flex items-center gap-1">
                       <CalendarIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                      تاريخ الانتهاء (هجري)
-                    </label>
+                      <span>تاريخ الانتهاء (هجري)</span>
+                    </Label>
                     <Input
+                      id="poa-expiry-date"
                       placeholder="مثال: 10/01/1448"
                       value={expiryDateHijri}
                       onChange={(e) => setExpiryDateHijri(e.target.value)}
@@ -398,25 +461,30 @@ export default function PowerOfAttorneyPage() {
                   <div className="space-y-1.5 md:col-span-2 bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-emerald-500" />
-                      <span className="text-xs font-semibold">عدد الأيام المتبقية (احتساب آلي):</span>
+                      <span className="text-xs font-semibold">حالة صلاحية الوكالة:</span>
                     </div>
                     <span className={`font-mono text-sm font-bold px-3 py-0.5 rounded-full ${
-                      calculatedDays <= 0
+                      expiryValidation.status === 'invalid'
+                        ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30'
+                        : expiryValidation.status === 'empty'
+                        ? 'bg-muted text-muted-foreground'
+                        : expiryValidation.days <= 0
                         ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
-                        : calculatedDays <= 30
+                        : expiryValidation.days <= 30
                         ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
                         : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
                     }`}>
-                      {calculatedDays <= 0
-                        ? expiryDateHijri ? 'منتهية (0 يوم)' : 'أدخل تاريخ الانتهاء'
-                        : `${calculatedDays} يوم`}
+                      {expiryValidation.message}
                     </span>
                   </div>
 
                   {/* Notes */}
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-xs font-semibold">ملاحظات وشروط الوكالة</label>
+                    <Label htmlFor="poa-notes" className="text-xs font-semibold">
+                      ملاحظات وشروط الوكالة
+                    </Label>
                     <Textarea
+                      id="poa-notes"
                       placeholder="اكتب هنا صلاحيات الوكالة أو أية ملاحظات إضافية..."
                       rows={3}
                       value={notes}

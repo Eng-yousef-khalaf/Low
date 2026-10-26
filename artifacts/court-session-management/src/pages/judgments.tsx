@@ -582,6 +582,8 @@ export default function JudgmentsPage() {
                   className="font-mono text-sm"
                   dir="ltr"
                   required
+                  onInvalid={(e) => (e.target as HTMLInputElement).setCustomValidity('يرجى تعبئة هذا الحقل')}
+                  onInput={(e) => (e.target as HTMLInputElement).setCustomValidity('')}
                 />
               </div>
             </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
-import { useListSessions, type Session } from '@workspace/api-client-react';
+import { useListSessions, useGetCurrentUser, type Session } from '@workspace/api-client-react';
 import {
   CommandDialog,
   CommandInput,
@@ -10,7 +10,7 @@ import {
   CommandItem,
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
-import { Search, Scale, FileText, LayoutDashboard, MessageSquare, Calendar, Settings, ArrowLeft } from 'lucide-react';
+import { Search, Scale, FileText, LayoutDashboard, MessageSquare, Calendar, Settings, ArrowLeft, ShieldCheck, Gavel, CheckSquare, Users } from 'lucide-react';
 import { getArabicDayName } from '@/lib/hijri';
 
 interface GlobalSearchProps {
@@ -22,6 +22,18 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
   const [open, setOpen] = useState(false);
   const [, setLocation] = useLocation();
   const { data: sessions = [] } = useListSessions();
+  const { data: currentUser } = useGetCurrentUser();
+  const [poaRecords, setPoaRecords] = useState<any[]>([]);
+
+  // Load POAs from local storage when search opens
+  useEffect(() => {
+    if (open) {
+      try {
+        const raw = localStorage.getItem('legal_poa_records_v1');
+        if (raw) setPoaRecords(JSON.parse(raw));
+      } catch {}
+    }
+  }, [open]);
 
   // Listen for Ctrl+K or Cmd+K shortcut globally
   useEffect(() => {
@@ -39,6 +51,8 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
     setOpen(false);
     setLocation(path);
   };
+
+  const isAdmin = currentUser?.role === 'admin';
 
   return (
     <>
@@ -62,18 +76,131 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
       <CommandDialog open={open} onOpenChange={setOpen}>
         <div dir="rtl" className="flex flex-col overflow-hidden">
           <CommandInput
-            placeholder="ابحث برقم القضية، اسم المدعي، المحكمة، أو الدائرة..."
+            placeholder="ابحث برقم القضية، الوكالات، الأحكام، المهام، اسم المحكمة، أو الأطراف..."
             className="text-sm font-medium"
             data-testid="input-global-search"
           />
 
-          <CommandList className="max-h-[360px] p-2 space-y-2">
+          <CommandList className="max-h-[380px] p-2 space-y-2">
             <CommandEmpty className="py-8 text-center text-sm text-muted-foreground">
               <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2">
                 <Search className="w-5 h-5 text-muted-foreground" />
               </div>
               لم يتم العثور على أي نتائج مطابقة
             </CommandEmpty>
+
+            {/* Quick Navigation Pages */}
+            <CommandGroup heading="أقسام النظام والتنقل السريع">
+              <CommandItem
+                value="الوكالات الوكالة وكالة شرعية إدارة الوكالات توكيل تفويض poa attorney"
+                onSelect={() => handleSelect('/poa')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  <span className="font-semibold text-sm">إدارة الوكالات الشرعية</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/poa</span>
+              </CommandItem>
+
+              <CommandItem
+                value="الأحكام الحكم أحكام قضائية صك صكوك قرارات دعاوى judgments"
+                onSelect={() => handleSelect('/judgments')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Gavel className="w-4 h-4 text-blue-600" />
+                  <span className="font-semibold text-sm">الأحكام القضائية والصكوك</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/judgments</span>
+              </CommandItem>
+
+              <CommandItem
+                value="المهام مهمة مهام واجبات جدول أعمال متابعة tasks"
+                onSelect={() => handleSelect('/tasks')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <CheckSquare className="w-4 h-4 text-amber-500" />
+                  <span className="font-semibold text-sm">إدارة المهام والواجبات</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/tasks</span>
+              </CommandItem>
+
+              <CommandItem
+                value="جميع الجلسات جلسات المحكمة مواعيد جدول استماع sessions"
+                onSelect={() => handleSelect('/sessions')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Calendar className="w-4 h-4 text-primary" />
+                  <span className="font-semibold text-sm">جميع جلسات المحكمة</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/sessions</span>
+              </CommandItem>
+
+              <CommandItem
+                value="تقارير الجلسات تقرير طباعة تصدير ملخص reports"
+                onSelect={() => handleSelect('/reports')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                  <span className="font-semibold text-sm">تقارير الجلسات</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/reports</span>
+              </CommandItem>
+
+              <CommandItem
+                value="تحليل رسالة محكمة جديدة استخراج الذكاء الاصطناعي chat ai"
+                onSelect={() => handleSelect('/chat')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <MessageSquare className="w-4 h-4 text-primary" />
+                  <span className="font-semibold text-sm">تحليل رسالة محكمة جديدة (AI)</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/chat</span>
+              </CommandItem>
+
+              <CommandItem
+                value="لوحة التحكم الرئيسية الإحصائيات dashboard home"
+                onSelect={() => handleSelect('/')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <LayoutDashboard className="w-4 h-4 text-muted-foreground" />
+                  <span className="font-semibold text-sm">لوحة التحكم</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/</span>
+              </CommandItem>
+
+              <CommandItem
+                value="الإعدادات إعدادات النظام الربط مفاتيح الحساب settings"
+                onSelect={() => handleSelect('/settings')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Settings className="w-4 h-4 text-muted-foreground" />
+                  <span className="font-semibold text-sm">إعدادات النظام والربط</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/settings</span>
+              </CommandItem>
+
+              {isAdmin && (
+                <CommandItem
+                  value="إدارة المستخدمين المحامين الاشتراكات الباقات users admin"
+                  onSelect={() => handleSelect('/users')}
+                  className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-4 h-4 text-primary" />
+                    <span className="font-semibold text-sm">إدارة المستخدمين والاشتراكات</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground font-mono">/users</span>
+                </CommandItem>
+              )}
+            </CommandGroup>
 
             {/* Direct Sessions Results */}
             {Array.isArray(sessions) && sessions.length > 0 && (
@@ -125,6 +252,35 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
               </CommandGroup>
             )}
 
+            {/* Direct Wakala / POA Results */}
+            {poaRecords.length > 0 && (
+              <CommandGroup heading="الوكالات الشرعية">
+                {poaRecords.map((poa: any) => (
+                  <CommandItem
+                    key={`poa-${poa.id || poa.poaNumber}`}
+                    value={`وكالة ${poa.clientName || ''} ${poa.poaNumber || ''} ${poa.notes || ''}`}
+                    onSelect={() => handleSelect('/poa')}
+                    className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between gap-3 hover:bg-accent transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-sm">
+                          وكالة: {poa.clientName || 'عميل غير محدد'}
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate mt-0.5 font-mono">
+                          رقم: {poa.poaNumber || '—'} {poa.expiryDateHijri ? `· تنتهي: ${poa.expiryDateHijri}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-emerald-600 font-medium">عرض الوكالات ←</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
             {/* Direct Session Reports Results */}
             {Array.isArray(sessions) && sessions.length > 0 && (
               <CommandGroup heading="تقارير الجلسات">
@@ -154,30 +310,6 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
                 ))}
               </CommandGroup>
             )}
-
-            {/* Quick Navigation Pages */}
-            <CommandGroup heading="التنقل السريع">
-              <CommandItem onSelect={() => handleSelect('/')} className="cursor-pointer p-2 rounded-lg gap-2">
-                <LayoutDashboard className="w-4 h-4 text-muted-foreground" />
-                <span>لوحة التحكم</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect('/chat')} className="cursor-pointer p-2 rounded-lg gap-2">
-                <MessageSquare className="w-4 h-4 text-muted-foreground" />
-                <span>تحليل رسالة محكمة جديدة</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect('/sessions')} className="cursor-pointer p-2 rounded-lg gap-2">
-                <Calendar className="w-4 h-4 text-muted-foreground" />
-                <span>جميع الجلسات</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect('/reports')} className="cursor-pointer p-2 rounded-lg gap-2">
-                <FileText className="w-4 h-4 text-muted-foreground" />
-                <span>تقارير الجلسات</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect('/settings')} className="cursor-pointer p-2 rounded-lg gap-2">
-                <Settings className="w-4 h-4 text-muted-foreground" />
-                <span>الإعدادات</span>
-              </CommandItem>
-            </CommandGroup>
           </CommandList>
 
           {/* Footer Shortcuts hint */}
