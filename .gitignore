@@ -55,9 +55,14 @@ service-account.json
 settings.json
 artifacts/api-server/settings.json
 .data/
+local_users.json
+artifacts/api-server/local_users.json
 local_sessions.json
 artifacts/api-server/local_sessions.json
+.env
+.env.*
 *.env
+!.env.example
 *.pem
 
 # Scratch & temporary files

@@ -7,6 +7,9 @@
   <a href="https://github.com/Eng-yousef-khalaf/Low">
     <img src="https://img.shields.io/badge/Release-v2.0%20Enterprise-093A2A?style=for-the-badge&logo=scales&logoColor=white" alt="Version" />
   </a>
+  <a href="https://github.com/Eng-yousef-khalaf/Low/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/Eng-yousef-khalaf/Low/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI%20%26%20Security" alt="CI Status" />
+  </a>
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
   <img src="https://img.shields.io/badge/Express-5.x-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node & Express 5" />
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5.9" />

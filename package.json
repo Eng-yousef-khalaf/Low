@@ -1,6 +1,13 @@
 {
-  "name": "workspace",
-  "version": "0.0.0",
+  "name": "legal-cloud-saas",
+  "version": "2.0.0",
+  "description": "Enterprise Multi-Tenant Legal Practice & Court Session Management Cloud SaaS Platform",
+  "author": "Eng. Yousef A. Khalaf <https://github.com/Eng-yousef-khalaf>",
+  "homepage": "https://yousef-khalaf.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Eng-yousef-khalaf/Low.git"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "pnpm run --parallel --filter @workspace/api-server --filter @workspace/court-session-management dev",

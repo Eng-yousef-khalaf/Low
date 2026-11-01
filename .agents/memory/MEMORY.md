@@ -1,2 +1,0 @@
-- [Google Sheets as app DB](sheets-as-db-pattern.md) — pattern for using a spreadsheet as record store: row-number-as-id, lazy env access, header-row self-healing.
-- [Hijri date/time parsing for scheduling](hijri-date-parsing.md) — tabular civil-calendar conversion + Arabic AM/PM parsing to compute real datetimes from SMS-style Hijri text.
