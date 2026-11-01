@@ -2,19 +2,41 @@ import type { Session, SessionInput, SessionUpdate, SessionStatus } from "@works
 import {
   appendRow,
   deleteRow,
-  ensureSheetReady,
   listRows,
+  listSessionRecordsRaw,
+  restoreSessionRow,
   SHEET_COLUMNS,
   updateRow,
   updateRowCells,
   type SheetRow,
 } from "./googleSheets.service";
 import { computeHearingDateTime, parseHijriDateString, hijriToGregorian } from "../utils/hijri";
+import { normalizeNumericDigits } from "../utils/dateNormalize";
 import { env } from "../config/env";
-import { logger } from "../lib/logger";
 import { listPoaRows } from "./poa.sheets.service";
 import { listJudgmentRowsWithHeaders } from "./judgment.sheets.service";
 import { listTaskRowsWithHeaders } from "./task.sheets.service";
+import type { SheetRowMeta } from "../utils/sheetMeta";
+
+export type ExtendedSession = Session & {
+  recordId?: string;
+  officeId?: string;
+  assignedLawyer?: string | null;
+  assigneeId?: string | null;
+  caseId?: string | null;
+  conflicts?: SessionConflictWarning[];
+};
+
+export interface SessionConflictWarning {
+  conflictingSessionId: number;
+  caseNumber: string | null;
+  court: string | null;
+  sessionDateHijri: string | null;
+  sessionTime: string | null;
+  assignedLawyer: string | null;
+  sameLawyer: boolean;
+  reason: string;
+}
 
 const COLUMN_INDEX: Record<string, number> = {
   // Arabic headers
@@ -62,7 +84,7 @@ function cell(row: SheetRow, name: string): string {
   return row[index] ?? "";
 }
 
-function nullableString(value: string | undefined): string | null {
+function nullableString(value: string | undefined | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -103,7 +125,7 @@ export function computeSessionDayStr(
   return ARABIC_DAYS[date.getUTCDay()] ?? "—";
 }
 
-function rowToSession(id: number, row: SheetRow): Session {
+function rowToSession(id: number, row: SheetRow, meta?: SheetRowMeta): ExtendedSession {
   const sessionDateHijri = nullableString(cell(row, "Session Date Hijri"));
   const sessionTime = nullableString(cell(row, "Session Time"));
   const hearingDate = computeHearingDateTime(sessionDateHijri, sessionTime);
@@ -125,8 +147,13 @@ function rowToSession(id: number, row: SheetRow): Session {
     status: parseStatus(cell(row, "Status")),
     reminder24: cell(row, "Reminder24") === "true",
     reminder6: cell(row, "Reminder6") === "true",
-    createdAt: cell(row, "Created At") || new Date().toISOString(),
+    createdAt: cell(row, "Created At") || meta?.createdAt || new Date().toISOString(),
     hearingAt: hearingDate ? hearingDate.toISOString() : null,
+    recordId: meta?.recordId,
+    officeId: meta?.officeId,
+    assignedLawyer: typeof meta?.assignedLawyer === "string" ? meta.assignedLawyer : null,
+    assigneeId: typeof meta?.assigneeId === "string" ? meta.assigneeId : null,
+    caseId: typeof meta?.caseId === "string" ? meta.caseId : null,
   };
 }
 
@@ -147,16 +174,16 @@ export function computeDaysRemainingStr(
   const nowMecca = new Date(Date.now() + offsetHours * 3600 * 1000);
   const hearingMecca = new Date(hearingAt.getTime() + offsetHours * 3600 * 1000);
 
-  const hearingYear = hearingMecca.getUTCFullYear();
-  const hearingMonth = hearingMecca.getUTCMonth();
-  const hearingDay = hearingMecca.getUTCDate();
-
-  const nowYear = nowMecca.getUTCFullYear();
-  const nowMonth = nowMecca.getUTCMonth();
-  const nowDay = nowMecca.getUTCDate();
-
-  const hearingMidnight = Date.UTC(hearingYear, hearingMonth, hearingDay);
-  const nowMidnight = Date.UTC(nowYear, nowMonth, nowDay);
+  const hearingMidnight = Date.UTC(
+    hearingMecca.getUTCFullYear(),
+    hearingMecca.getUTCMonth(),
+    hearingMecca.getUTCDate(),
+  );
+  const nowMidnight = Date.UTC(
+    nowMecca.getUTCFullYear(),
+    nowMecca.getUTCMonth(),
+    nowMecca.getUTCDate(),
+  );
 
   const diffMs = hearingMidnight - nowMidnight;
   const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
@@ -167,26 +194,28 @@ export function computeDaysRemainingStr(
 }
 
 function sessionInputToRow(input: SessionInput, createdAt: string): SheetRow {
-  const daysRemaining = computeDaysRemainingStr(input.sessionDateHijri, input.sessionTime);
-  const sessionDay = computeSessionDayStr(input.sessionDateHijri, input.sessionTime);
+  const normalizedDate = input.sessionDateHijri ? normalizeNumericDigits(input.sessionDateHijri) : "";
+  const normalizedTime = input.sessionTime ? normalizeNumericDigits(input.sessionTime) : "";
+  const daysRemaining = computeDaysRemainingStr(normalizedDate, normalizedTime);
+  const sessionDay = computeSessionDayStr(normalizedDate, normalizedTime);
   return [
-    input.caseNumber ?? "",              // 0: رقم القضية
-    input.plaintiff ?? "",               // 1: المدعي
-    input.defendant ?? "",               // 2: المدعى عليه
-    input.court ?? "",                   // 3: المحكمة
-    input.courtCircuit ?? "",            // 4: الدائرة القضائية
-    input.caseSubject ?? "",             // 5: موضوع القضية
-    input.sessionType ?? "",             // 6: نوع الجلسة
-    input.sessionDateHijri ?? "",        // 7: تاريخ الجلسة هجري
-    sessionDay,                          // 8: يوم الجلسة
-    input.sessionTime ?? "",             // 9: وقت الجلسة
-    daysRemaining,                       // 10: الأيام المتبقية
-    input.notes ?? "",                    // 11: ملاحظات
-    "Upcoming",                          // 12: حالة الجلسة
-    "false",                             // 13: تذكير 24 ساعة
-    "false",                             // 14: تذكير 6 ساعات
-    createdAt,                           // 15: تاريخ الإنشاء
-    "",                                  // 16: التقرير
+    input.caseNumber ?? "",       // 0: رقم القضية
+    input.plaintiff ?? "",        // 1: المدعي
+    input.defendant ?? "",        // 2: المدعى عليه
+    input.court ?? "",            // 3: المحكمة
+    input.courtCircuit ?? "",     // 4: الدائرة القضائية
+    input.caseSubject ?? "",      // 5: موضوع القضية
+    input.sessionType ?? "",      // 6: نوع الجلسة
+    normalizedDate,               // 7: تاريخ الجلسة هجري
+    sessionDay,                   // 8: يوم الجلسة
+    normalizedTime,               // 9: وقت الجلسة
+    daysRemaining,                // 10: الأيام المتبقية
+    input.notes ?? "",            // 11: ملاحظات
+    "Upcoming",                   // 12: حالة الجلسة
+    "false",                      // 13: تذكير 24 ساعة
+    "false",                      // 14: تذكير 6 ساعات
+    createdAt,                    // 15: تاريخ الإنشاء
+    "",                           // 16: التقرير
   ];
 }
 
@@ -216,7 +245,7 @@ function deriveEffectiveStatus(session: Session): SessionStatus {
   return isSameDay ? "Today" : "Upcoming";
 }
 
-export function sortSessionsByNearestTime(sessions: Session[]): Session[] {
+export function sortSessionsByNearestTime<T extends Session>(sessions: T[]): T[] {
   const now = Date.now();
 
   return [...sessions].sort((a, b) => {
@@ -249,26 +278,78 @@ export function sortSessionsByNearestTime(sessions: Session[]): Session[] {
   });
 }
 
-export async function listSessions(statusFilter?: SessionStatus, userId?: string): Promise<Session[]> {
-  await ensureSheetReady(userId);
-  const rows = await listRows(userId);
-  let sessions = rows
-    .map(({ id, values }) => {
-      const s = rowToSession(id, values);
-      const expectedDay = computeSessionDayStr(s.sessionDateHijri, s.sessionTime);
-      const expectedRemaining = computeDaysRemainingStr(s.sessionDateHijri, s.sessionTime);
+/**
+ * Detects overlapping or conflicting hearings within the same office
+ * (within 60 minutes on the same date, or exact date+time match).
+ */
+export async function detectSessionConflicts(
+  userId: string | undefined,
+  candidate: {
+    sessionDateHijri?: string | null;
+    sessionTime?: string | null;
+    assignedLawyer?: string | null;
+    excludeId?: number;
+  },
+): Promise<SessionConflictWarning[]> {
+  if (!candidate.sessionDateHijri?.trim()) {
+    return [];
+  }
+  const all = await listSessions(undefined, userId);
+  const normCandidateDate = normalizeNumericDigits(candidate.sessionDateHijri).replace(/-/g, "/").trim();
+  const normCandidateTime = candidate.sessionTime
+    ? normalizeNumericDigits(candidate.sessionTime).trim()
+    : "";
+  const candidateHearing = computeHearingDateTime(normCandidateDate, normCandidateTime || null);
+  const candidateLawyer = candidate.assignedLawyer?.trim().toLowerCase() || "";
 
-      const currentDayCell = cell(values, "Session Day");
-      const currentRemainingCell = cell(values, "Days Remaining");
+  const conflicts: SessionConflictWarning[] = [];
 
-      if (currentDayCell !== expectedDay || currentRemainingCell !== expectedRemaining) {
-        updateRowCells(id, {
-          [COLUMN_INDEX["Days Remaining"]]: expectedRemaining,
-          [COLUMN_INDEX["Session Day"]]: expectedDay,
-        }, userId).catch((err) => logger.warn({ err, id, userId }, "Failed to auto-sync row cells"));
+  for (const existing of all) {
+    if (candidate.excludeId && existing.id === candidate.excludeId) continue;
+    if (existing.status === "Cancelled" || existing.status === "Finished") continue;
+    if (!existing.sessionDateHijri) continue;
+
+    const existingDate = normalizeNumericDigits(existing.sessionDateHijri).replace(/-/g, "/").trim();
+    const existingTime = existing.sessionTime ? normalizeNumericDigits(existing.sessionTime).trim() : "";
+
+    let isTimeOverlap = false;
+    if (candidateHearing && existing.hearingAt && normCandidateTime && existingTime) {
+      const diffMinutes = Math.abs(candidateHearing.getTime() - new Date(existing.hearingAt).getTime()) / 60_000;
+      if (diffMinutes < 60) {
+        isTimeOverlap = true;
       }
-      return s;
+    } else if (existingDate === normCandidateDate && normCandidateTime && existingTime === normCandidateTime) {
+      isTimeOverlap = true;
+    }
+
+    if (!isTimeOverlap) continue;
+
+    const existingLawyer = (existing.assignedLawyer || "").trim().toLowerCase();
+    const sameLawyer = Boolean(candidateLawyer && existingLawyer && candidateLawyer === existingLawyer);
+
+    conflicts.push({
+      conflictingSessionId: existing.id,
+      caseNumber: existing.caseNumber,
+      court: existing.court,
+      sessionDateHijri: existing.sessionDateHijri,
+      sessionTime: existing.sessionTime,
+      assignedLawyer: existing.assignedLawyer ?? null,
+      sameLawyer,
+      reason: sameLawyer
+        ? `تعارض مباشر للمحامي المكلف (${existing.assignedLawyer}) مع جلسة القضية ${existing.caseNumber || `#${existing.id}`} في نفس التوقيت.`
+        : `تداخل زمني بالمكتب مع جلسة القضية ${existing.caseNumber || `#${existing.id}`} (${existing.court || "محكمة غير محددة"}) الساعة ${existing.sessionTime || "غير محدد"}.`,
     });
+  }
+
+  return conflicts;
+}
+
+export async function listSessions(
+  statusFilter?: SessionStatus,
+  userId?: string,
+): Promise<ExtendedSession[]> {
+  const rows = await listRows(userId);
+  let sessions = rows.map(({ id, values, meta }) => rowToSession(id, values, meta));
 
   if (statusFilter) {
     sessions = sessions.filter((s) => deriveEffectiveStatus(s) === statusFilter);
@@ -277,71 +358,124 @@ export async function listSessions(statusFilter?: SessionStatus, userId?: string
   return sortSessionsByNearestTime(sessions);
 }
 
-export async function getSessionById(id: number, userId?: string): Promise<Session | null> {
+export async function getSessionById(id: number, userId?: string): Promise<ExtendedSession | null> {
   const rows = await listRows(userId);
   const match = rows.find((r) => r.id === id);
-  return match ? rowToSession(match.id, match.values) : null;
+  return match ? rowToSession(match.id, match.values, match.meta) : null;
 }
 
-export async function createSession(input: SessionInput, userId?: string): Promise<Session> {
-  await ensureSheetReady(userId);
+export async function createSession(
+  input: SessionInput & {
+    assignedLawyer?: string | null;
+    assigneeId?: string | null;
+    caseId?: string | null;
+  },
+  userId?: string,
+): Promise<ExtendedSession> {
   const createdAt = new Date().toISOString();
   const row = sessionInputToRow(input, createdAt);
-  const id = await appendRow(row, userId);
-  return rowToSession(id, row);
+  const conflicts = await detectSessionConflicts(userId, {
+    sessionDateHijri: input.sessionDateHijri,
+    sessionTime: input.sessionTime,
+    assignedLawyer: input.assignedLawyer,
+  });
+
+  const { id, meta } = await appendRow(row, userId, {
+    assignedLawyer: input.assignedLawyer ?? null,
+    assigneeId: input.assigneeId ?? null,
+    caseId: input.caseId ?? null,
+  });
+  const created = rowToSession(id, row, meta);
+  if (conflicts.length > 0) {
+    created.conflicts = conflicts;
+  }
+  return created;
 }
 
 export async function updateSession(
   id: number,
-  patch: SessionUpdate,
+  patch: SessionUpdate & {
+    assignedLawyer?: string | null;
+    assigneeId?: string | null;
+    caseId?: string | null;
+  },
   userId?: string,
-): Promise<Session | null> {
+): Promise<ExtendedSession | null> {
   const rows = await listRows(userId);
   const match = rows.find((r) => r.id === id);
   if (!match) {
     return null;
   }
-  const existing = rowToSession(id, match.values);
+  const existing = rowToSession(id, match.values, match.meta);
   const existingReport = match.values[COLUMN_INDEX["Report"]] ?? "";
 
-  const merged: Session = {
+  const merged: ExtendedSession = {
     ...existing,
     ...Object.fromEntries(
       Object.entries(patch).filter(([, value]) => value !== undefined),
     ),
   };
-  const daysRemaining = computeDaysRemainingStr(merged.sessionDateHijri, merged.sessionTime);
-  const sessionDay = computeSessionDayStr(merged.sessionDateHijri, merged.sessionTime);
+
+  const normalizedDate = merged.sessionDateHijri ? normalizeNumericDigits(merged.sessionDateHijri) : "";
+  const normalizedTime = merged.sessionTime ? normalizeNumericDigits(merged.sessionTime) : "";
+  const daysRemaining = computeDaysRemainingStr(normalizedDate, normalizedTime);
+  const sessionDay = computeSessionDayStr(normalizedDate, normalizedTime);
+
   const row: SheetRow = [
-    merged.caseNumber ?? "",             // 0: رقم القضية
-    merged.plaintiff ?? "",              // 1: المدعي
-    merged.defendant ?? "",              // 2: المدعى عليه
-    merged.court ?? "",                  // 3: المحكمة
-    merged.courtCircuit ?? "",           // 4: الدائرة القضائية
-    merged.caseSubject ?? "",            // 5: موضوع القضية
-    merged.sessionType ?? "",            // 6: نوع الجلسة
-    merged.sessionDateHijri ?? "",       // 7: تاريخ الجلسة هجري
-    sessionDay,                          // 8: يوم الجلسة
-    merged.sessionTime ?? "",            // 9: وقت الجلسة
-    daysRemaining,                       // 10: الأيام المتبقية
-    merged.notes ?? "",                  // 11: ملاحظات
-    merged.status,                       // 12: حالة الجلسة
-    String(merged.reminder24),           // 13: تذكير 24 ساعة
-    String(merged.reminder6),            // 14: تذكير 6 ساعات
-    merged.createdAt,                    // 15: تاريخ الإنشاء
-    existingReport,                      // 16: التقرير
+    merged.caseNumber ?? "",          // 0: رقم القضية
+    merged.plaintiff ?? "",           // 1: المدعي
+    merged.defendant ?? "",           // 2: المدعى عليه
+    merged.court ?? "",               // 3: المحكمة
+    merged.courtCircuit ?? "",        // 4: الدائرة القضائية
+    merged.caseSubject ?? "",         // 5: موضوع القضية
+    merged.sessionType ?? "",         // 6: نوع الجلسة
+    normalizedDate,                   // 7: تاريخ الجلسة هجري
+    sessionDay,                       // 8: يوم الجلسة
+    normalizedTime,                   // 9: وقت الجلسة
+    daysRemaining,                    // 10: الأيام المتبقية
+    merged.notes ?? "",               // 11: ملاحظات
+    merged.status,                    // 12: حالة الجلسة
+    String(merged.reminder24),        // 13: تذكير 24 ساعة
+    String(merged.reminder6),         // 14: تذكير 6 ساعات
+    merged.createdAt,                 // 15: تاريخ الإنشاء
+    existingReport,                   // 16: التقرير
   ];
-  await updateRow(id, row, userId);
-  return merged;
+
+  const updatedMeta = await updateRow(id, row, userId, {
+    assignedLawyer: merged.assignedLawyer ?? null,
+    assigneeId: merged.assigneeId ?? null,
+    caseId: merged.caseId ?? null,
+  });
+
+  const conflicts = await detectSessionConflicts(userId, {
+    sessionDateHijri: normalizedDate,
+    sessionTime: normalizedTime,
+    assignedLawyer: merged.assignedLawyer,
+    excludeId: id,
+  });
+  const result = rowToSession(id, row, updatedMeta);
+  if (conflicts.length > 0) {
+    result.conflicts = conflicts;
+  }
+  return result;
 }
 
 export async function deleteSession(id: number, userId?: string): Promise<boolean> {
-  const existing = await getSessionById(id, userId);
-  if (!existing) {
-    return false;
-  }
-  await deleteRow(id, userId);
-  return true;
+  return deleteRow(id, userId);
+}
+
+export async function restoreDeletedSession(id: number, userId?: string): Promise<boolean> {
+  return restoreSessionRow(id, userId);
+}
+
+export async function listDeletedSessions(userId?: string): Promise<ExtendedSession[]> {
+  const { records } = await listSessionRecordsRaw(userId, {
+    includeDeleted: true,
+    forceRefresh: true,
+  });
+  return records
+    .filter((r) => Boolean(r.meta.deletedAt))
+    .map((r) => rowToSession(r.id, r.values, r.meta));
 }
 
 export async function markReminderSent(
@@ -365,20 +499,24 @@ export interface DashboardStats {
   inProgressTasks: number;
   completedTasks: number;
   urgentTasks: number;
+  lastSyncedAt?: string;
 }
 
 export async function getDashboardStats(userId?: string): Promise<DashboardStats> {
-  const [sessionsRes, poaRes, judgmentRes, taskRes] = await Promise.allSettled([
-    listSessions(undefined, userId),
-    listPoaRows(),
-    listJudgmentRowsWithHeaders(),
-    listTaskRowsWithHeaders(),
+  // Primary read: do NOT swallow OfficeLinkIncompleteError / ExternalServiceError on sessions!
+  const sessions = await listSessions(undefined, userId);
+
+  const [poaRes, judgmentRes, taskRes] = await Promise.allSettled([
+    listPoaRows(false, userId),
+    listJudgmentRowsWithHeaders(false, userId),
+    listTaskRowsWithHeaders(false, userId),
   ]);
 
-  const sessions = sessionsRes.status === "fulfilled" ? sessionsRes.value : [];
   const poas = poaRes.status === "fulfilled" ? poaRes.value : [];
-  const judgmentData = judgmentRes.status === "fulfilled" ? judgmentRes.value : { headers: [], rows: [] };
-  const taskData = taskRes.status === "fulfilled" ? taskRes.value : { headers: [], rows: [] };
+  const judgmentData =
+    judgmentRes.status === "fulfilled" ? judgmentRes.value : { headers: [], rows: [], syncedAt: "" };
+  const taskData =
+    taskRes.status === "fulfilled" ? taskRes.value : { headers: [], rows: [], syncedAt: "" };
 
   const uniqueCases = new Set<string>();
   let todayHearings = 0;
@@ -405,7 +543,10 @@ export async function getDashboardStats(userId?: string): Promise<DashboardStats
   let favorableJudgments = 0;
   let unfavorableJudgments = 0;
   for (const j of judgmentData.rows) {
-    const ruling = (j.values[8] || "").trim();
+    const metaOutcome = typeof j.meta?.rulingOutcome === "string" ? j.meta.rulingOutcome.trim() : "";
+    const cellOutcome = (j.values[8] || "").trim();
+    const ruling = metaOutcome || cellOutcome;
+
     if (ruling === "لصالحنا" || ruling.toLowerCase() === "favorable") {
       favorableJudgments++;
     } else if (ruling === "ضدنا" || ruling.toLowerCase() === "unfavorable") {
@@ -417,10 +558,11 @@ export async function getDashboardStats(userId?: string): Promise<DashboardStats
   let completedTasks = 0;
   let urgentTasks = 0;
   for (const t of taskData.rows) {
-    const status = (t.values[4] || "").trim();
-    const priority = (t.values[3] || "").trim();
+    // TASK_SHEET_COLUMNS: 0=title, 1=assignee, 2=priority, 3=dueDate, 4=remainingDays, 5=status
+    const priority = (t.values[2] || "").trim();
+    const status = (t.values[5] || "").trim();
 
-    if (status === "قيد التنفيذ" || status === "جديدة" || status === "قيد المراجعة") {
+    if (status === "قيد التنفيذ" || status === "جديدة" || status === "قيد المراجعة" || status === "معلقة") {
       inProgressTasks++;
     } else if (status === "مكتملة") {
       completedTasks++;
@@ -443,29 +585,37 @@ export async function getDashboardStats(userId?: string): Promise<DashboardStats
     inProgressTasks,
     completedTasks,
     urgentTasks,
+    lastSyncedAt: new Date().toISOString(),
   };
 }
 
-export async function getSessionReport(id: number, userId?: string): Promise<{ session: Session; report: string | null } | null> {
+export async function getSessionReport(
+  id: number,
+  userId?: string,
+): Promise<{ session: ExtendedSession; report: string | null } | null> {
   const rows = await listRows(userId);
   const match = rows.find((r) => r.id === id);
   if (!match) {
     return null;
   }
-  const session = rowToSession(match.id, match.values);
+  const session = rowToSession(match.id, match.values, match.meta);
   const rawReport = match.values[COLUMN_INDEX["Report"]];
   const report = rawReport && rawReport.trim().length > 0 ? rawReport.trim() : null;
   return { session, report };
 }
 
-export async function saveSessionReport(id: number, report: string, userId?: string): Promise<{ session: Session; report: string } | null> {
+export async function saveSessionReport(
+  id: number,
+  report: string,
+  userId?: string,
+): Promise<{ session: ExtendedSession; report: string } | null> {
   const rows = await listRows(userId);
   const match = rows.find((r) => r.id === id);
   if (!match) {
     return null;
   }
   await updateRowCells(id, { [COLUMN_INDEX["Report"]]: report }, userId);
-  const session = rowToSession(match.id, match.values);
+  const session = rowToSession(match.id, match.values, match.meta);
   return { session, report };
 }
 

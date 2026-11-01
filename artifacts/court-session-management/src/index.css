@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -63,7 +65,10 @@
 }
 
 /* LIGHT MODE */
-:root {
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
   --button-outline: rgba(0, 0, 0, 0.1);
   --badge-outline: rgba(0, 0, 0, 0.05);
 
@@ -106,7 +111,7 @@
   --secondary-foreground: 222 47% 11%;
 
   --muted: 210 40% 96.5%;
-  --muted-foreground: 215 16% 47%;
+  --muted-foreground: 215 16% 43%;
 
   /* Accent: الذهبي (#B88A3B) */
   --accent: 38 51% 48%;
@@ -117,7 +122,7 @@
 
   --input: 214 32% 91%;
   --ring: 160 73% 13%;
-  
+
   --chart-1: 160 73% 13%;
   --chart-2: 38 51% 48%;
   --chart-3: 160 75% 35%;
@@ -128,7 +133,7 @@
   --app-font-serif: Georgia, serif;
   --app-font-mono: 'IBM Plex Mono', 'Courier New', monospace;
   --radius: 0.5rem;
-  
+
   --shadow-2xs: 0px 1px 2px 0px rgba(9, 58, 42, 0.05);
   --shadow-xs: 0px 1px 3px 0px rgba(9, 58, 42, 0.08);
   --shadow-sm:
@@ -147,7 +152,7 @@
     0px 20px 25px -5px rgba(9, 58, 42, 0.08),
     0px 10px 10px -5px rgba(9, 58, 42, 0.03);
   --shadow-2xl: 0px 25px 50px -12px rgba(9, 58, 42, 0.2);
-  
+
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 
@@ -194,59 +199,63 @@
   );
 }
 
-.dark {
-  --button-outline: rgba(255, 255, 255, 0.1);
-  --badge-outline: rgba(255, 255, 255, 0.05);
+/* DARK MODE — Tinted dark surfaces (#0B1320 / #111C2E), off-white text, WCAG AA contrast */
+.dark,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --button-outline: rgba(255, 255, 255, 0.12);
+  --badge-outline: rgba(255, 255, 255, 0.08);
 
   --opaque-button-border-intensity: 9;
 
   --elevate-1: rgba(255, 255, 255, 0.04);
   --elevate-2: rgba(255, 255, 255, 0.09);
 
-  --background: 214 50% 8%;
-  --foreground: 0 0% 92%;
+  --background: 216 45% 8%;
+  --foreground: 210 25% 93%;
 
-  --border: 214 30% 16%;
+  --border: 215 28% 19%;
 
-  --card: 214 45% 11%;
-  --card-foreground: 0 0% 92%;
-  --card-border: 214 30% 18%;
+  --card: 216 40% 11.5%;
+  --card-foreground: 210 25% 93%;
+  --card-border: 215 28% 21%;
 
-  --sidebar: 214 60% 7%;
-  --sidebar-foreground: 0 0% 88%;
-  --sidebar-border: 214 40% 14%;
-  --sidebar-primary: 38 51% 52%;
+  --sidebar: 162 65% 7%;
+  --sidebar-foreground: 0 0% 92%;
+  --sidebar-border: 160 40% 15%;
+  --sidebar-primary: 38 58% 54%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 214 40% 15%;
-  --sidebar-accent-foreground: 0 0% 92%;
-  --sidebar-ring: 38 51% 52%;
+  --sidebar-accent: 160 42% 16%;
+  --sidebar-accent-foreground: 0 0% 94%;
+  --sidebar-ring: 38 58% 54%;
 
-  --popover: 214 45% 11%;
-  --popover-foreground: 0 0% 92%;
-  --popover-border: 214 30% 18%;
+  --popover: 216 40% 12%;
+  --popover-foreground: 210 25% 93%;
+  --popover-border: 215 28% 21%;
 
-  --primary: 214 65% 25%;
+  --primary: 160 58% 36%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 214 30% 16%;
-  --secondary-foreground: 0 0% 88%;
+  --secondary: 215 28% 17%;
+  --secondary-foreground: 210 20% 90%;
 
-  --muted: 214 30% 15%;
-  --muted-foreground: 0 0% 65%;
+  --muted: 215 28% 15.5%;
+  --muted-foreground: 215 16% 68%;
 
-  --accent: 38 51% 52%;
+  --accent: 38 58% 52%;
   --accent-foreground: 0 0% 100%;
 
-  --destructive: 0 75% 58%;
+  --destructive: 0 72% 56%;
   --destructive-foreground: 0 0% 100%;
 
-  --input: 214 30% 20%;
-  --ring: 38 51% 52%;
-  
-  --chart-1: 214 65% 35%;
-  --chart-2: 38 51% 52%;
-  --chart-3: 160 75% 48%;
-  --chart-4: 280 65% 62%;
+  --input: 215 28% 21%;
+  --ring: 38 58% 54%;
+
+  --chart-1: 160 65% 42%;
+  --chart-2: 38 58% 54%;
+  --chart-3: 198 75% 52%;
+  --chart-4: 280 65% 64%;
   --chart-5: 0 75% 58%;
 
   --shadow-2xs: 0px 1px 2px 0px rgba(0, 0, 0, 0.5);
@@ -279,27 +288,37 @@
   }
 
   /* Dark mode specific improvements */
-  .dark body {
-    background-color: hsl(214, 50%, 8%);
+  .dark body,
+  :root[data-theme="dark"] body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
   }
 
-  /* Make inputs more visible in dark mode */
-  .dark input,
-  .dark textarea,
-  .dark select {
-    background-color: hsl(214, 30%, 14%);
-    border-color: hsl(214, 30%, 22%);
-    color: hsl(0, 0%, 92%);
+  /* Make inputs, selects, and textareas crisp and accessible in dark mode */
+  .dark input:not(#report-print-area *),
+  .dark textarea:not(#report-print-area *),
+  .dark select:not(#report-print-area *) {
+    background-color: hsl(216, 34%, 14%);
+    border-color: hsl(215, 28%, 24%);
+    color: hsl(210, 25%, 93%);
   }
 
-  .dark input::placeholder,
-  .dark textarea::placeholder {
-    color: hsl(0, 0%, 55%);
+  .dark input:not(#report-print-area *)::placeholder,
+  .dark textarea:not(#report-print-area *)::placeholder {
+    color: hsl(215, 15%, 58%);
   }
 
   /* Better card borders in dark mode */
-  .dark .rounded-xl.border {
-    border-color: hsl(214, 30%, 18%);
+  .dark .rounded-xl.border,
+  .dark .rounded-2xl.border {
+    border-color: hsl(215, 28%, 21%);
+  }
+
+  /* Keep official printable legal report A4 sheet crisp white in both themes */
+  #report-print-area {
+    color-scheme: light;
+    background-color: #ffffff;
+    color: #0f172a;
   }
 }
 
@@ -375,7 +394,7 @@
   .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
     inset: -1px;
   }
-  
+
   .rtl-text {
     direction: rtl;
     text-align: right;
@@ -390,6 +409,13 @@
   /* Gradient text */
   .gradient-text {
     background: linear-gradient(135deg, #0F2747, #B88A3B);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .dark .gradient-text {
+    background: linear-gradient(135deg, #34D399, #FBBF24);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;

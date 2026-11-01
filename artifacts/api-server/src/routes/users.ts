@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { attachAuthUser, requireAuth, requireAdmin } from "../middlewares/auth.middleware";
+import { attachAuthUser, requireAdmin } from "../middlewares/auth.middleware";
 import {
   listSupabaseUsers,
   createSupabaseUser,
@@ -9,18 +9,17 @@ import {
   resetUserAiUsage,
 } from "../services/supabase.service";
 import { isSupabaseConfigured } from "../config/env";
-import { logger } from "../lib/logger";
+import { recordAuditEvent } from "../services/audit.service";
+import { invalidateSessionsCache } from "../services/googleSheets.service";
+import { invalidatePoaCache } from "../services/poa.sheets.service";
+import { invalidateTaskCache } from "../services/task.sheets.service";
+import { invalidateJudgmentCache } from "../services/judgment.sheets.service";
 
 const router: IRouter = Router();
 
-// Require admin authentication on all user management routes
 router.use(attachAuthUser, requireAdmin);
 
-/**
- * GET /api/users
- * Returns list of users and supabase connection status
- */
-router.get("/users", async (_req, res) => {
+router.get("/users", async (_req, res, next) => {
   try {
     const isConfigured = isSupabaseConfigured();
     const users = await listSupabaseUsers();
@@ -28,28 +27,23 @@ router.get("/users", async (_req, res) => {
       isSupabaseConfigured: isConfigured,
       users,
     });
-  } catch (err: any) {
-    logger.error({ err }, "Failed to fetch users");
-    res.status(500).json({
-      error: err.message || "فشل جلب المستخدمين.",
-      isSupabaseConfigured: isSupabaseConfigured(),
-      users: [],
-    });
+  } catch (err) {
+    next(err);
   }
 });
 
-/**
- * POST /api/users
- * Creates a new user (Admin only)
- */
-router.post("/users", requireAdmin, async (req, res) => {
+router.post("/users", async (req, res, next) => {
   try {
     const {
       username,
       email,
       password,
       role,
+      office_id,
+      office_role,
+      permissions,
       display_name,
+      whatsapp_number,
       status,
       subscription_end_date,
       subscription_notes,
@@ -61,17 +55,24 @@ router.post("/users", requireAdmin, async (req, res) => {
       google_sheet_name,
     } = req.body;
 
-    if (!username || !password) {
-      res.status(400).json({ error: "اسم المستخدم وكلمة المرور مطلوبان." });
+    if (!username?.trim() || !password) {
+      res.status(400).json({
+        error: "اسم المستخدم وكلمة المرور مطلوبان.",
+        code: "VALIDATION_ERROR",
+      });
       return;
     }
 
     const newUser = await createSupabaseUser({
-      username,
+      username: username.trim(),
       email,
       password,
       role: role === "admin" ? "admin" : "staff",
+      office_id,
+      office_role,
+      permissions,
       display_name,
+      whatsapp_number,
       status: status || "active",
       subscription_end_date: subscription_end_date || null,
       subscription_notes: subscription_notes || null,
@@ -83,24 +84,33 @@ router.post("/users", requireAdmin, async (req, res) => {
       google_sheet_name,
     });
 
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: newUser.office_id,
+      action: "user.create",
+      entityType: "user",
+      entityId: newUser.id,
+      summary: `إنشاء حساب مستخدم جديد (${newUser.username}) بدور (${newUser.role})`,
+    });
+
     res.status(201).json(newUser);
-  } catch (err: any) {
-    logger.error({ err }, "Failed to create user");
-    res.status(400).json({ error: err.message || "فشل إنشاء المستخدم." });
+  } catch (err) {
+    next(err);
   }
 });
 
-/**
- * PATCH /api/users/:id
- * Updates an existing user (Admin only)
- */
-router.patch("/users/:id", requireAdmin, async (req, res) => {
+router.patch("/users/:id", async (req, res, next) => {
   try {
     const id = String(req.params.id);
     const {
       password,
       role,
+      office_id,
+      office_role,
+      permissions,
       display_name,
+      whatsapp_number,
       email,
       status,
       subscription_end_date,
@@ -117,7 +127,11 @@ router.patch("/users/:id", requireAdmin, async (req, res) => {
     const updatedUser = await updateSupabaseUser(id, {
       password,
       role,
+      office_id,
+      office_role,
+      permissions,
       display_name,
+      whatsapp_number,
       email,
       status,
       subscription_end_date,
@@ -131,61 +145,96 @@ router.patch("/users/:id", requireAdmin, async (req, res) => {
       google_sheet_name,
     });
 
+    invalidateSessionsCache(updatedUser.office_id);
+    invalidatePoaCache(updatedUser.office_id);
+    invalidateTaskCache(updatedUser.office_id);
+    invalidateJudgmentCache(updatedUser.office_id);
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: updatedUser.office_id,
+      action: "user.update",
+      entityType: "user",
+      entityId: updatedUser.id,
+      summary: `تحديث بيانات وصلاحيات الحساب (${updatedUser.username})`,
+    });
+
     res.json(updatedUser);
-  } catch (err: any) {
-    logger.error({ err, id: req.params.id }, "Failed to update user");
-    res.status(400).json({ error: err.message || "فشل تعديل المستخدم." });
+  } catch (err) {
+    next(err);
   }
 });
 
-/**
- * POST /api/users/:id/reset-ai-usage
- * Resets user's AI quota usage counter to 0 (Admin only)
- */
-router.post("/users/:id/reset-ai-usage", requireAdmin, async (req, res) => {
+router.post("/users/:id/reset-ai-usage", async (req, res, next) => {
   try {
     const id = String(req.params.id);
     const updated = await resetUserAiUsage(id);
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: updated.office_id,
+      action: "user.reset_ai_quota",
+      entityType: "user",
+      entityId: id,
+      summary: `تصفير عداد الذكاء الاصطناعي للحساب (${updated.username})`,
+    });
+
     res.json(updated);
-  } catch (err: any) {
-    logger.error({ err, id: req.params.id }, "Failed to reset AI usage");
-    res.status(400).json({ error: err.message || "فشل تصفير استهلاك الذكاء الاصطناعي." });
+  } catch (err) {
+    next(err);
   }
 });
 
-/**
- * POST /api/users/:id/toggle-status
- * Suspends or reactivates a user's subscription (Admin only)
- */
-router.post("/users/:id/toggle-status", requireAdmin, async (req, res) => {
+router.post("/users/:id/toggle-status", async (req, res, next) => {
   try {
     const id = String(req.params.id);
     const { status } = req.body;
     const updated = await toggleUserStatus(id, status);
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: updated.office_id,
+      action: `user.status_${updated.status}`,
+      entityType: "user",
+      entityId: id,
+      summary: `تغيير حالة اشتراك الحساب (${updated.username}) إلى (${updated.status})`,
+    });
+
     res.json(updated);
-  } catch (err: any) {
-    logger.error({ err, id: req.params.id }, "Failed to toggle user status");
-    res.status(400).json({ error: err.message || "فشل تغيير حالة الاشتراك." });
+  } catch (err) {
+    next(err);
   }
 });
 
-/**
- * DELETE /api/users/:id
- * Deletes a user (Admin only)
- */
-router.delete("/users/:id", requireAdmin, async (req, res) => {
+router.delete("/users/:id", async (req, res, next) => {
   try {
     const id = String(req.params.id);
-    if (req.authUser?.userId === id) {
-      res.status(400).json({ error: "لا يمكنك حذف الحساب الذي قمت بتسجيل الدخول به حالياً." });
+    if (req.userId === id) {
+      res.status(400).json({
+        error: "لا يمكنك حذف الحساب الذي قمت بتسجيل الدخول به حالياً.",
+        code: "VALIDATION_ERROR",
+      });
       return;
     }
 
     await deleteSupabaseUser(id);
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: req.officeId || "platform-admin",
+      action: "user.delete",
+      entityType: "user",
+      entityId: id,
+      summary: `حذف الحساب (${id}) وإبطال جلساته الفعالة فوراً`,
+    });
+
     res.status(204).send();
-  } catch (err: any) {
-    logger.error({ err, id: req.params.id }, "Failed to delete user");
-    res.status(400).json({ error: err.message || "فشل حذف المستخدم." });
+  } catch (err) {
+    next(err);
   }
 });
 

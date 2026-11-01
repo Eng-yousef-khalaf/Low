@@ -3,6 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          var prefersDark =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var resolved =
+            saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light";
+          var root = document.documentElement;
+          root.dataset.theme = resolved;
+          if (resolved === "dark") {
+            root.classList.add("dark");
+          } else {
+            root.classList.remove("dark");
+          }
+          var meta = document.querySelector('meta[name="color-scheme"]');
+          if (meta) meta.setAttribute("content", resolved);
+        } catch (e) {}
+      })();
+    </script>
     <title>نظام إدارة جلسات المحكمة</title>
     <meta name="description" content="نظام إدارة جلسات المحكمة بالذكاء الاصطناعي للمكاتب القانونية" />
     <meta name="robots" content="index, follow" />
@@ -11,9 +32,12 @@
     <meta property="og:type" content="website" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

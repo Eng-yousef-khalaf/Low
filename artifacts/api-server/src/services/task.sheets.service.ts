@@ -1,13 +1,31 @@
-import { google, type sheets_v4 } from "googleapis";
-import { env } from "../config/env";
 import { logger } from "../lib/logger";
+import { ExternalServiceError, NotFoundError } from "../lib/errors";
+import {
+  getGoogleContext,
+  resolveOfficeScope,
+  readOfficeLocalRows,
+  writeOfficeLocalRows,
+} from "./googleSheets.service";
+import {
+  createNewRowMeta,
+  parseRowMeta,
+  serializeRowMeta,
+  withSheetLock,
+  isRowOwnedByOffice,
+  type SheetRowMeta,
+} from "../utils/sheetMeta";
 
 /**
- * Google Sheets service for Tasks (المهام) records.
- * Uses a dedicated sheet tab named "Tasks" in the spreadsheet.
+ * Google Sheets service for Tasks (المهام) records
+ * with strict per-office isolation, permanent stable IDs, read-only GETs,
+ * write serialization, and soft-delete / restore support.
+ *
+ * Columns A..H (0..7): canonical Arabic Task columns.
+ * Column I (8): `_meta_json` metadata cell.
  */
 
 const TASK_SHEET_NAME = "Tasks";
+const MAX_BOUNDED_ROWS = 2000;
 
 export const TASK_SHEET_COLUMNS = [
   "عنوان المهمة",
@@ -20,250 +38,333 @@ export const TASK_SHEET_COLUMNS = [
   "تاريخ الإنشاء",
 ] as const;
 
-export const TASK_COLS = TASK_SHEET_COLUMNS.length; // 8
-const COL_LAST = String.fromCharCode("A".charCodeAt(0) + TASK_COLS - 1); // "H"
+export const TASK_COLS = TASK_SHEET_COLUMNS.length; // 8 (A..H)
+const TASK_META_COL_INDEX = TASK_COLS; // 8 (I)
+const COL_DATA_LAST = "H";
+const COL_WITH_META_LAST = "I";
 
-let sheetsClient: sheets_v4.Sheets | null = null;
+export type TaskRow = string[];
 
-function getClient(): sheets_v4.Sheets {
-  if (!sheetsClient) {
-    const credentials = env.googleServiceAccountJson as {
-      client_email?: string;
-      private_key?: string;
-    };
-    if (!credentials.client_email || !credentials.private_key) {
-      throw new Error(
-        "GOOGLE_SERVICE_ACCOUNT_JSON is missing client_email/private_key.",
-      );
+export interface StoredTaskRecord {
+  id: number;
+  physicalRowNumber: number;
+  values: TaskRow;
+  meta: SheetRowMeta;
+}
+
+const taskDataCacheMap = new Map<
+  string,
+  { syncedAt: string; time: number; records: StoredTaskRecord[] }
+>();
+const TASK_CACHE_TTL_MS = 10_000;
+
+export function invalidateTaskCache(officeOrUserId?: string): void {
+  if (!officeOrUserId) {
+    taskDataCacheMap.clear();
+    return;
+  }
+  for (const key of taskDataCacheMap.keys()) {
+    if (key.includes(officeOrUserId)) {
+      taskDataCacheMap.delete(key);
     }
-    const privateKey = credentials.private_key.replace(/\\n/g, "\n");
-    const auth = new google.auth.JWT({
-      email: credentials.client_email,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
-    sheetsClient = google.sheets({ version: "v4", auth });
   }
-  return sheetsClient;
 }
 
-let taskSheetIdCache: number | null = null;
-let isTaskSheetReadyCache = false;
-
-// In-memory data cache
-let taskDataCache: { id: number; values: TaskRow }[] | null = null;
-let lastTaskCacheTime = 0;
-const TASK_CACHE_TTL_MS = 15000; // 15 seconds
-
-export function invalidateTaskCache(): void {
-  taskDataCache = null;
-  lastTaskCacheTime = 0;
-}
-
-async function getTaskSheetId(): Promise<number> {
-  if (taskSheetIdCache !== null) return taskSheetIdCache;
-  const sheets = getClient();
-  const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: env.googleSpreadsheetId,
-  });
-  const sheet = spreadsheet.data.sheets?.find(
-    (s) => s.properties?.title === TASK_SHEET_NAME,
-  );
-  if (!sheet?.properties && sheet?.properties?.sheetId === undefined) {
-    throw new Error(`Sheet tab "${TASK_SHEET_NAME}" not found.`);
+function padTaskCells(values: TaskRow): TaskRow {
+  const copy = [...values];
+  while (copy.length < TASK_COLS) {
+    copy.push("");
   }
-  taskSheetIdCache = sheet!.properties!.sheetId!;
-  return taskSheetIdCache;
+  return copy.slice(0, TASK_COLS);
 }
 
-/** Ensures the "Tasks" sheet tab exists with the correct header row and formatting. */
-export async function ensureTaskSheetReady(): Promise<void> {
-  if (isTaskSheetReadyCache) return;
+/**
+ * Ensures the "Tasks" sheet tab exists with canonical headers.
+ * IMPORTANT: Called ONLY before write operations — NEVER during GET reads!
+ */
+export async function ensureTaskSheetReady(userId?: string): Promise<void> {
+  const context = await getGoogleContext(userId);
+  if (!context) return;
 
   try {
-    const sheets = getClient();
-    const spreadsheet = await sheets.spreadsheets.get({
-      spreadsheetId: env.googleSpreadsheetId,
+    const spreadsheet = await context.sheets.spreadsheets.get({
+      spreadsheetId: context.spreadsheetId,
     });
     const existing = spreadsheet.data.sheets?.find(
       (s) => s.properties?.title === TASK_SHEET_NAME,
     );
 
     if (!existing) {
-      const addRes = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: env.googleSpreadsheetId,
+      await context.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: context.spreadsheetId,
         requestBody: {
           requests: [{ addSheet: { properties: { title: TASK_SHEET_NAME } } }],
         },
       });
-      taskSheetIdCache = addRes.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
-      logger.info(`Created sheet tab "${TASK_SHEET_NAME}"`);
-    } else {
-      taskSheetIdCache = existing.properties?.sheetId ?? null;
     }
 
-    // 1. Write header row
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: env.googleSpreadsheetId,
-      range: `${TASK_SHEET_NAME}!A1:${COL_LAST}1`,
-      valueInputOption: "RAW",
-      requestBody: { values: [[...TASK_SHEET_COLUMNS]] },
+    const headerRes = await context.sheets.spreadsheets.values.get({
+      spreadsheetId: context.spreadsheetId,
+      range: `${TASK_SHEET_NAME}!A1:${COL_DATA_LAST}1`,
     });
+    const currentHeader = headerRes.data.values?.[0] ?? [];
+    if (currentHeader.length < TASK_COLS || currentHeader[0] !== TASK_SHEET_COLUMNS[0]) {
+      await context.sheets.spreadsheets.values.update({
+        spreadsheetId: context.spreadsheetId,
+        range: `${TASK_SHEET_NAME}!A1:${COL_DATA_LAST}1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [[...TASK_SHEET_COLUMNS]] },
+      });
+    }
+  } catch (err: any) {
+    logger.error({ code: err?.code, officeId: context.officeId }, "ensureTaskSheetReady failed");
+    throw new ExternalServiceError("تعذر تهيئة ورقة المهام في Google Sheets.");
+  }
+}
 
-    isTaskSheetReadyCache = true;
+export async function listTaskRecordsWithMeta(
+  forceRefresh = false,
+  userId?: string,
+  includeDeleted = false,
+): Promise<{ records: StoredTaskRecord[]; syncedAt: string }> {
+  const scope = await resolveOfficeScope(userId);
+  const cacheKey = scope.officeId;
+  const now = Date.now();
+  const cached = taskDataCacheMap.get(cacheKey);
 
-    // 2. Format header row safely (non-blocking)
-    if (taskSheetIdCache !== null) {
-      try {
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId: env.googleSpreadsheetId,
-          requestBody: {
-            requests: [
-              {
-                repeatCell: {
-                  range: {
-                    sheetId: taskSheetIdCache,
-                    startRowIndex: 0,
-                    endRowIndex: 1,
-                    startColumnIndex: 0,
-                    endColumnIndex: TASK_COLS,
-                  },
-                  cell: {
-                    userEnteredFormat: {
-                      backgroundColor: { red: 0.1, green: 0.15, blue: 0.25 },
-                      textFormat: {
-                        foregroundColor: { red: 1, green: 1, blue: 1 },
-                        bold: true,
-                        fontSize: 10,
-                      },
-                      horizontalAlignment: "CENTER",
-                      verticalAlignment: "MIDDLE",
-                    },
-                  },
-                  fields:
-                    "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
-                },
-              },
-            ],
-          },
+  if (!forceRefresh && cached && now - cached.time < TASK_CACHE_TTL_MS) {
+    const filtered = includeDeleted
+      ? cached.records
+      : cached.records.filter((r) => !r.meta.deletedAt);
+    return { records: filtered, syncedAt: cached.syncedAt };
+  }
+
+  const context = await getGoogleContext(userId);
+  if (context) {
+    try {
+      const response = await context.sheets.spreadsheets.values.get({
+        spreadsheetId: context.spreadsheetId,
+        range: `${TASK_SHEET_NAME}!A2:${COL_WITH_META_LAST}${MAX_BOUNDED_ROWS}`,
+      });
+      const rows = response.data.values ?? [];
+      const records: StoredTaskRecord[] = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const fullRow = rows[i] as string[];
+        const dataCells = padTaskCells(fullRow);
+        const hasContent = dataCells.some((cell) => cell !== undefined && cell !== "");
+        const rawMetaCell = fullRow[TASK_META_COL_INDEX];
+        if (!hasContent && !rawMetaCell) continue;
+
+        const meta = parseRowMeta(rawMetaCell, dataCells, scope.officeId);
+        if (!isRowOwnedByOffice(meta, scope.officeId)) continue;
+
+        records.push({
+          id: meta.id,
+          physicalRowNumber: i + 2,
+          values: dataCells,
+          meta,
         });
-      } catch (fmtErr) {
-        logger.warn({ fmtErr }, "Non-fatal formatting warning for Tasks sheet");
+      }
+
+      const syncedAt = new Date().toISOString();
+      taskDataCacheMap.set(cacheKey, { syncedAt, time: now, records });
+      const filtered = includeDeleted
+        ? records
+        : records.filter((r) => !r.meta.deletedAt);
+      return { records: filtered, syncedAt };
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      if (msg.includes("Unable to parse range") || err?.code === 400) {
+        const syncedAt = new Date().toISOString();
+        return { records: [], syncedAt };
+      }
+      logger.error({ code: err?.code, officeId: scope.officeId }, "Failed to fetch task rows from Google Sheets");
+      throw new ExternalServiceError(
+        "تعذر قراءة سجل المهام من Google Sheets. يرجى التحقق من اتصال الجدول وصلاحيات الوصول.",
+      );
+    }
+  }
+
+  const stored = readOfficeLocalRows<{ id: number; values: TaskRow; meta?: SheetRowMeta }>(
+    "tasks",
+    scope.officeId,
+  );
+  const records: StoredTaskRecord[] = stored
+    .map((item, idx) => {
+      const dataCells = padTaskCells(item.values || []);
+      const meta =
+        item.meta ??
+        parseRowMeta(item.values?.[TASK_META_COL_INDEX], dataCells, scope.officeId);
+      if (item.id && !item.meta) meta.id = item.id;
+      return {
+        id: meta.id,
+        physicalRowNumber: idx + 2,
+        values: dataCells,
+        meta,
+      };
+    })
+    .filter((r) => isRowOwnedByOffice(r.meta, scope.officeId));
+
+  const syncedAt = new Date().toISOString();
+  taskDataCacheMap.set(cacheKey, { syncedAt, time: now, records });
+  const filtered = includeDeleted
+    ? records
+    : records.filter((r) => !r.meta.deletedAt);
+  return { records: filtered, syncedAt };
+}
+
+export async function listTaskRows(
+  forceRefresh = false,
+  userId?: string,
+): Promise<{ id: number; values: TaskRow; meta: SheetRowMeta }[]> {
+  const { records } = await listTaskRecordsWithMeta(forceRefresh, userId, false);
+  return records.map((r) => ({ id: r.id, values: r.values, meta: r.meta }));
+}
+
+export async function listTaskRowsWithHeaders(
+  forceRefresh = false,
+  userId?: string,
+): Promise<{
+  headers: string[];
+  rows: { id: number; values: TaskRow; meta: SheetRowMeta }[];
+  syncedAt: string;
+}> {
+  const { records, syncedAt } = await listTaskRecordsWithMeta(forceRefresh, userId, false);
+  return {
+    headers: [...TASK_SHEET_COLUMNS],
+    rows: records.map((r) => ({ id: r.id, values: r.values, meta: r.meta })),
+    syncedAt,
+  };
+}
+
+export async function appendTaskRow(
+  values: TaskRow,
+  userId?: string,
+  extraMeta?: Partial<SheetRowMeta>,
+): Promise<number> {
+  const scope = await resolveOfficeScope(userId);
+  const lockKey = `tasks:${scope.officeId}`;
+
+  return withSheetLock(lockKey, async () => {
+    invalidateTaskCache(scope.officeId);
+    const meta = createNewRowMeta(scope.officeId, scope.userId, extraMeta);
+    const dataCells = padTaskCells(values);
+    const rowWithMeta = [...dataCells, serializeRowMeta(meta)];
+
+    const context = await getGoogleContext(userId);
+    if (context) {
+      await ensureTaskSheetReady(userId);
+      try {
+        await context.sheets.spreadsheets.values.append({
+          spreadsheetId: context.spreadsheetId,
+          range: `${TASK_SHEET_NAME}!A:${COL_WITH_META_LAST}`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values: [rowWithMeta] },
+        });
+        invalidateTaskCache(scope.officeId);
+        return meta.id;
+      } catch (err: any) {
+        logger.error({ code: err?.code, officeId: scope.officeId }, "Google Sheets appendTaskRow failed");
+        throw new ExternalServiceError("فشل حفظ المهمة في Google Sheets.");
       }
     }
-  } catch (err) {
-    logger.warn({ err }, "ensureTaskSheetReady warning");
-    isTaskSheetReadyCache = true;
-  }
+
+    const local = readOfficeLocalRows<{ id: number; values: TaskRow; meta: SheetRowMeta }>(
+      "tasks",
+      scope.officeId,
+    );
+    local.push({ id: meta.id, values: dataCells, meta });
+    writeOfficeLocalRows("tasks", scope.officeId, local);
+    invalidateTaskCache(scope.officeId);
+    return meta.id;
+  });
 }
 
-export type TaskRow = string[];
+export async function updateTaskRow(
+  stableId: number,
+  values: TaskRow,
+  userId?: string,
+  metaPatch?: Partial<SheetRowMeta>,
+): Promise<void> {
+  const scope = await resolveOfficeScope(userId);
+  const lockKey = `tasks:${scope.officeId}`;
 
-/** Returns all Task records (excluding header row), using in-memory cache if fresh. */
-export async function listTaskRowsWithHeaders(forceRefresh = false): Promise<{
-  headers: string[];
-  rows: { id: number; values: TaskRow }[];
-}> {
-  await ensureTaskSheetReady();
-
-  const now = Date.now();
-  const useCache =
-    !forceRefresh &&
-    taskDataCache !== null &&
-    now - lastTaskCacheTime < TASK_CACHE_TTL_MS;
-
-  try {
-    const sheets = getClient();
-
-    if (useCache) {
-      const headerRes = await sheets.spreadsheets.values.get({
-        spreadsheetId: env.googleSpreadsheetId,
-        range: `${TASK_SHEET_NAME}!A1:${COL_LAST}1`,
-      });
-      const headers = ((headerRes.data.values?.[0] as string[]) ?? [...TASK_SHEET_COLUMNS]);
-      return { headers, rows: taskDataCache! };
+  await withSheetLock(lockKey, async () => {
+    invalidateTaskCache(scope.officeId);
+    const { records } = await listTaskRecordsWithMeta(true, userId, true);
+    const target = records.find((r) => r.id === stableId);
+    if (!target) {
+      throw new NotFoundError("المهمة غير موجودة أو لا تتبع لهذا المكتب.");
     }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: env.googleSpreadsheetId,
-      range: `${TASK_SHEET_NAME}!A1:${COL_LAST}`,
-    });
-    const data = response.data.values ?? [];
-    const headers = (data[0] as string[]) ?? [...TASK_SHEET_COLUMNS];
-    const dataRows = data.slice(1);
-    const rows = dataRows
-      .map((row, index) => ({ id: index + 2, values: row as TaskRow }))
-      .filter((row) => row.values.some((cell) => cell !== undefined && cell !== ""));
-
-    taskDataCache = rows;
-    lastTaskCacheTime = now;
-    return { headers, rows };
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch Task rows from Google Sheets, returning cached/empty");
-    return {
-      headers: [...TASK_SHEET_COLUMNS],
-      rows: taskDataCache ?? [],
+    const updatedMeta: SheetRowMeta = {
+      ...target.meta,
+      ...metaPatch,
+      id: target.meta.id,
+      recordId: target.meta.recordId,
+      officeId: scope.officeId,
+      updatedAt: new Date().toISOString(),
     };
+    const dataCells = padTaskCells(values);
+    const rowWithMeta = [...dataCells, serializeRowMeta(updatedMeta)];
+
+    const context = await getGoogleContext(userId);
+    if (context) {
+      try {
+        const rowNum = target.physicalRowNumber;
+        await context.sheets.spreadsheets.values.update({
+          spreadsheetId: context.spreadsheetId,
+          range: `${TASK_SHEET_NAME}!A${rowNum}:${COL_WITH_META_LAST}${rowNum}`,
+          valueInputOption: "RAW",
+          requestBody: { values: [rowWithMeta] },
+        });
+        invalidateTaskCache(scope.officeId);
+        return;
+      } catch (err: any) {
+        logger.error({ code: err?.code, officeId: scope.officeId }, "Google Sheets updateTaskRow failed");
+        throw new ExternalServiceError("فشل تحديث بيانات المهمة في Google Sheets.");
+      }
+    }
+
+    const local = readOfficeLocalRows<{ id: number; values: TaskRow; meta: SheetRowMeta }>(
+      "tasks",
+      scope.officeId,
+    );
+    const idx = local.findIndex((r) => (r.meta?.id ?? r.id) === stableId);
+    if (idx === -1) {
+      throw new NotFoundError("المهمة غير موجودة.");
+    }
+    local[idx] = { id: stableId, values: dataCells, meta: updatedMeta };
+    writeOfficeLocalRows("tasks", scope.officeId, local);
+    invalidateTaskCache(scope.officeId);
+  });
+}
+
+export async function deleteTaskRow(stableId: number, userId?: string): Promise<boolean> {
+  const scope = await resolveOfficeScope(userId);
+  const { records } = await listTaskRecordsWithMeta(true, userId, false);
+  const target = records.find((r) => r.id === stableId);
+  if (!target) {
+    return false;
   }
+  await updateTaskRow(stableId, target.values, userId, {
+    deletedAt: new Date().toISOString(),
+    deletedBy: scope.userId,
+  });
+  return true;
 }
 
-/**
- * Appends a new Task record row and returns its 1-based row id.
- * Uses OVERWRITE (not INSERT_ROWS) to avoid inheriting header row formatting.
- */
-export async function appendTaskRow(values: TaskRow): Promise<number> {
-  invalidateTaskCache();
-  const sheets = getClient();
-  const paddedValues: string[] = Array.from({ length: TASK_COLS }, (_, i) => values[i] ?? "");
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId: env.googleSpreadsheetId,
-    range: `${TASK_SHEET_NAME}!A:${COL_LAST}`,
-    valueInputOption: "RAW",
-    insertDataOption: "OVERWRITE",
-    requestBody: { values: [paddedValues] },
+export async function restoreTaskRow(stableId: number, userId?: string): Promise<boolean> {
+  const { records } = await listTaskRecordsWithMeta(true, userId, true);
+  const target = records.find((r) => r.id === stableId && Boolean(r.meta.deletedAt));
+  if (!target) {
+    return false;
+  }
+  await updateTaskRow(stableId, target.values, userId, {
+    deletedAt: null,
+    deletedBy: null,
   });
-  const updatedRange = response.data.updates?.updatedRange;
-  const match = updatedRange?.match(/![A-Z]+(\d+):/);
-  if (match) return Number(match[1]);
-  const { rows } = await listTaskRowsWithHeaders();
-  const last = rows[rows.length - 1];
-  if (!last) throw new Error("Failed to determine id of newly created Task row.");
-  return last.id;
-}
-
-/** Updates an existing Task row by its 1-based row id. */
-export async function updateTaskRow(id: number, values: TaskRow): Promise<void> {
-  invalidateTaskCache();
-  const sheets = getClient();
-  const paddedValues: string[] = Array.from({ length: TASK_COLS }, (_, i) => values[i] ?? "");
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: env.googleSpreadsheetId,
-    range: `${TASK_SHEET_NAME}!A${id}:${COL_LAST}${id}`,
-    valueInputOption: "RAW",
-    requestBody: { values: [paddedValues] },
-  });
-}
-
-/** Deletes a Task row by its 1-based row id. */
-export async function deleteTaskRow(id: number): Promise<void> {
-  invalidateTaskCache();
-  const sheets = getClient();
-  const sheetId = await getTaskSheetId();
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: env.googleSpreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          deleteDimension: {
-            range: {
-              sheetId,
-              dimension: "ROWS",
-              startIndex: id - 1,
-              endIndex: id,
-            },
-          },
-        },
-      ],
-    },
-  });
+  return true;
 }

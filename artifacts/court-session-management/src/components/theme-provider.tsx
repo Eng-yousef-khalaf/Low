@@ -1,37 +1,84 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
-type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark';
 
 interface ThemeContextValue {
   theme: Theme;
   setTheme: (theme: Theme) => void;
+  toggleTheme: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    // Default to clean, modern light mode
+function resolveInitialTheme(): Theme {
+  try {
     const stored = localStorage.getItem('theme');
-    if (stored === 'dark') {
-      localStorage.setItem('theme', 'light');
-      return 'light';
+    if (stored === 'dark' || stored === 'light') {
+      return stored;
     }
-    return 'light';
-  });
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 'light';
+}
+
+function applyThemeToDom(theme: Theme) {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.dataset.theme = theme;
+  if (theme === 'dark') {
+    root.classList.add('dark');
+  } else {
+    root.classList.remove('dark');
+  }
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (meta) {
+    meta.setAttribute('content', theme);
+  }
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = useState<Theme>(resolveInitialTheme);
+
+  const setTheme = useCallback((next: Theme) => {
+    setThemeState(next);
+    applyThemeToDom(next);
+    try {
+      localStorage.setItem('theme', next);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(theme === 'dark' ? 'light' : 'dark');
+  }, [theme, setTheme]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+    applyThemeToDom(theme);
+    try {
+      localStorage.setItem('theme', theme);
+    } catch {
+      // ignore
     }
-    localStorage.setItem('theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'theme' && (e.newValue === 'dark' || e.newValue === 'light')) {
+        setThemeState(e.newValue);
+        applyThemeToDom(e.newValue);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );

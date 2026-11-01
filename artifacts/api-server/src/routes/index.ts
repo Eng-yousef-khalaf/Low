@@ -11,6 +11,10 @@ import poaRouter from "./poa";
 import judgmentsRouter from "./judgments";
 import tasksRouter from "./tasks";
 import usersRouter from "./users";
+import clientsRouter from "./clients";
+import casesRouter from "./cases";
+import teamRouter from "./team";
+import auditRouter from "./audit";
 
 const router: IRouter = Router();
 
@@ -26,5 +30,9 @@ router.use(poaRouter);
 router.use(judgmentsRouter);
 router.use(tasksRouter);
 router.use(usersRouter);
+router.use(clientsRouter);
+router.use(casesRouter);
+router.use(teamRouter);
+router.use(auditRouter);
 
 export default router;

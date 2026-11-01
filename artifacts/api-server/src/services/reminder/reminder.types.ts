@@ -1,12 +1,8 @@
-/**
- * Contract every reminder delivery channel must implement. The scheduler
- * only ever talks to `ReminderService.notify(...)` (see reminder.service.ts)
- * — it never knows how a reminder is actually delivered. Adding WhatsApp,
- * email, SMS, or push notifications later means writing a new
- * `ReminderChannel` and registering it; the scheduler's logic never changes.
- */
 export interface ReminderPayload {
   sessionId: number;
+  officeId?: string;
+  userId?: string;
+  recipientPhone?: string | null;
   caseNumber: string | null;
   sessionDateHijri: string | null;
   sessionTime: string | null;
@@ -20,7 +16,13 @@ export interface ReminderPayload {
   caseSubject?: string | null;
 }
 
+export interface ChannelSendResult {
+  delivered: boolean;
+  isExternalChannel: boolean;
+  reason?: string;
+}
+
 export interface ReminderChannel {
   readonly name: string;
-  send(payload: ReminderPayload): Promise<void>;
+  send(payload: ReminderPayload): Promise<ChannelSendResult>;
 }

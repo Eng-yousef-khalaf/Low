@@ -1,22 +1,27 @@
 import { logger } from "../../../lib/logger";
-import type { ReminderChannel, ReminderPayload } from "../reminder.types";
+import type { ChannelSendResult, ReminderChannel, ReminderPayload } from "../reminder.types";
 
 /**
- * v1 reminder channel: logs the reminder instead of sending it anywhere.
- * Swap in / add WhatsApp, email, SMS, or push channels by implementing
- * `ReminderChannel` and registering them in `reminder.service.ts` —
- * this class and the scheduler stay untouched.
+ * Audit-safe diagnostic console channel:
+ * Logs ONLY opaque identifiers (`sessionId`, `officeId`, `kind`) — NEVER party names,
+ * phone numbers, or case subjects!
+ * Returns `isExternalChannel: false` so console logging alone NEVER marks a reminder as delivered.
  */
 export class ConsoleReminderChannel implements ReminderChannel {
   readonly name = "console";
 
-  async send(payload: ReminderPayload): Promise<void> {
-    const label = payload.kind === "24h" ? "tomorrow" : "in a few hours";
+  async send(payload: ReminderPayload): Promise<ChannelSendResult> {
     logger.info(
-      { ...payload },
-      `Reminder:\nCase ${payload.caseNumber ?? "(unknown)"}\nHearing ${label} at ${
-        payload.sessionTime ?? "(unknown time)"
-      }.`,
+      {
+        sessionId: payload.sessionId,
+        officeId: payload.officeId || "unspecified",
+        kind: payload.kind,
+      },
+      "Session reminder event evaluated",
     );
+    return {
+      delivered: true,
+      isExternalChannel: false,
+    };
   }
 }

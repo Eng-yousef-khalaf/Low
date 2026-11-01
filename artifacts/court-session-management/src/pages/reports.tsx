@@ -40,7 +40,7 @@ export default function ReportsPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <div className="w-1 h-6 rounded-full bg-primary" />
-            <h1 className="text-2xl font-bold tracking-tight">تقارير الجلسات</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">تقارير الجلسات</h1>
           </div>
           <p className="text-muted-foreground text-sm mr-3">
             إدارة وعرض تقارير الجلسات مرتبة حسب التوقيت الأقرب
@@ -80,14 +80,15 @@ export default function ReportsPage() {
           ))}
         </div>
       ) : error ? (
-        <div className="fade-in-up rounded-2xl border border-destructive/30 bg-destructive/8 p-8 text-center space-y-4">
+        <div className="fade-in-up rounded-2xl border border-destructive/30 bg-destructive/10 p-8 text-center space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-destructive/15 text-destructive flex items-center justify-center mx-auto">
             <AlertCircle className="w-6 h-6" />
           </div>
           <div className="space-y-1">
             <h3 className="text-base font-bold text-destructive">فشل تحميل قائمة تقارير الجلسات</h3>
             <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
-              تعذر الاتصال بـ Google Sheets لجلب بيانات الجلسات. يرجى التحقق من اتصال الشبكة وصلاحيات ملف الاعتماد ثم إعادة المحاولة.
+              {(error as any)?.message ||
+                'تعذر الاتصال بمصدر بيانات المكتب لجلب الجلسات. يرجى التحقق من اكتمال ربط Google Sheets وصلاحيات ملف الاعتماد ثم إعادة المحاولة.'}
             </p>
           </div>
           <Button
@@ -121,7 +122,7 @@ export default function ReportsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-3 mb-2">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="font-bold text-base font-mono">
+                          <h3 className="font-bold text-base font-mono text-foreground">
                             {session.caseNumber || '—'}
                           </h3>
                           {/* Report status badge */}
@@ -175,10 +176,22 @@ export default function ReportsPage() {
           <div className="w-16 h-16 rounded-2xl bg-muted mx-auto mb-4 flex items-center justify-center">
             <FileText className="w-8 h-8 text-muted-foreground" />
           </div>
-          <h3 className="text-lg font-semibold mb-2">لا توجد جلسات</h3>
-          <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-            أضف جلسات أولاً من قسم "تحليل رسالة" ثم ادخل التقارير هنا.
+          <h3 className="text-lg font-semibold mb-2 text-foreground">لا توجد جلسات مسجلة</h3>
+          <p className="text-sm text-muted-foreground max-w-xs mx-auto mb-4">
+            أضف جلسة يدوياً من صفحة الجلسات أو عبر تحليل رسالة المحكمة ثم أنشئ التقرير هنا.
           </p>
+          <div className="flex items-center justify-center gap-2">
+            <Link href="/sessions">
+              <Button size="sm" variant="default" className="text-xs">
+                الانتقال إلى الجلسات
+              </Button>
+            </Link>
+            <Link href="/chat">
+              <Button size="sm" variant="outline" className="text-xs">
+                تحليل رسالة محكمة
+              </Button>
+            </Link>
+          </div>
         </div>
       )}
     </div>

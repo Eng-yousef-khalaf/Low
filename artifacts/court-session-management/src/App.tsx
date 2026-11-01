@@ -26,6 +26,11 @@ const SessionReportPage = React.lazy(() => import('@/pages/session-report'));
 const PoaPage = React.lazy(() => import('@/pages/poa'));
 const JudgmentsPage = React.lazy(() => import('@/pages/judgments'));
 const TasksPage = React.lazy(() => import('@/pages/tasks'));
+const ClientsPage = React.lazy(() => import('@/pages/clients'));
+const ClientDetailPage = React.lazy(() => import('@/pages/client-detail'));
+const CasesPage = React.lazy(() => import('@/pages/cases'));
+const CaseDetailPage = React.lazy(() => import('@/pages/case-detail'));
+const TeamPage = React.lazy(() => import('@/pages/team'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -149,11 +154,11 @@ function Router() {
         </AuthGuard>
       </Route>
       <Route path="/settings">
-        <AuthGuard>
+        <AdminGuard>
           <AppShell>
             <SettingsPage />
           </AppShell>
-        </AuthGuard>
+        </AdminGuard>
       </Route>
       <Route path="/reports">
         <AuthGuard>
@@ -187,6 +192,41 @@ function Router() {
         <AuthGuard>
           <AppShell>
             <TasksPage />
+          </AppShell>
+        </AuthGuard>
+      </Route>
+      <Route path="/clients">
+        <AuthGuard>
+          <AppShell>
+            <ClientsPage />
+          </AppShell>
+        </AuthGuard>
+      </Route>
+      <Route path="/clients/:id">
+        <AuthGuard>
+          <AppShell>
+            <ClientDetailPage />
+          </AppShell>
+        </AuthGuard>
+      </Route>
+      <Route path="/cases">
+        <AuthGuard>
+          <AppShell>
+            <CasesPage />
+          </AppShell>
+        </AuthGuard>
+      </Route>
+      <Route path="/cases/:id">
+        <AuthGuard>
+          <AppShell>
+            <CaseDetailPage />
+          </AppShell>
+        </AuthGuard>
+      </Route>
+      <Route path="/team">
+        <AuthGuard>
+          <AppShell>
+            <TeamPage />
           </AppShell>
         </AuthGuard>
       </Route>

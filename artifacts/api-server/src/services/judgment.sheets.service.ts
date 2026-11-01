@@ -1,13 +1,33 @@
-import { google, type sheets_v4 } from "googleapis";
-import { env } from "../config/env";
+import { type sheets_v4 } from "googleapis";
 import { logger } from "../lib/logger";
+import { ExternalServiceError, NotFoundError } from "../lib/errors";
+import {
+  getGoogleContext,
+  resolveOfficeScope,
+  readOfficeLocalRows,
+  writeOfficeLocalRows,
+} from "./googleSheets.service";
+import {
+  createNewRowMeta,
+  parseRowMeta,
+  serializeRowMeta,
+  withSheetLock,
+  isRowOwnedByOffice,
+  type SheetRowMeta,
+} from "../utils/sheetMeta";
 
 /**
- * Google Sheets service for Judgment (الأحكام) records.
- * Uses a dedicated sheet tab named "Judgment" in the spreadsheet.
+ * Google Sheets service for Judgment (الأحكام) records
+ * with strict per-office isolation, permanent stable IDs, read-only GETs,
+ * write serialization, and soft-delete / restore support.
+ *
+ * Columns A..J (0..9): canonical Arabic Judgment columns.
+ * Column K (10): `_meta_json` metadata cell (includes `rulingOutcome` & `judgmentType`).
  */
 
 const JUDGMENT_SHEET_NAME = "Judgment";
+const LEGACY_JUDGMENTS_SHEET_NAME = "Judgments";
+const MAX_BOUNDED_ROWS = 2000;
 
 export const JUDGMENT_SHEET_COLUMNS = [
   "رقم القضية",
@@ -22,305 +42,363 @@ export const JUDGMENT_SHEET_COLUMNS = [
   "تاريخ الإنشاء",
 ] as const;
 
-export const JUDGMENT_COLS = JUDGMENT_SHEET_COLUMNS.length; // 10
-const COL_LAST = String.fromCharCode("A".charCodeAt(0) + JUDGMENT_COLS - 1); // "J"
+export const JUDGMENT_COLS = JUDGMENT_SHEET_COLUMNS.length; // 10 (A..J)
+const JUDGMENT_META_COL_INDEX = JUDGMENT_COLS; // 10 (K)
+const COL_DATA_LAST = "J";
+const COL_WITH_META_LAST = "K";
 
-let sheetsClient: sheets_v4.Sheets | null = null;
+export type JudgmentRow = string[];
 
-function getClient(): sheets_v4.Sheets {
-  if (!sheetsClient) {
-    const credentials = env.googleServiceAccountJson as {
-      client_email?: string;
-      private_key?: string;
-    };
-    if (!credentials.client_email || !credentials.private_key) {
-      throw new Error(
-        "GOOGLE_SERVICE_ACCOUNT_JSON is missing client_email/private_key.",
-      );
+export interface StoredJudgmentRecord {
+  id: number;
+  physicalRowNumber: number;
+  values: JudgmentRow;
+  meta: SheetRowMeta;
+}
+
+const judgmentDataCacheMap = new Map<
+  string,
+  { syncedAt: string; time: number; records: StoredJudgmentRecord[] }
+>();
+const JUDGMENT_CACHE_TTL_MS = 10_000;
+
+export function invalidateJudgmentCache(officeOrUserId?: string): void {
+  if (!officeOrUserId) {
+    judgmentDataCacheMap.clear();
+    return;
+  }
+  for (const key of judgmentDataCacheMap.keys()) {
+    if (key.includes(officeOrUserId)) {
+      judgmentDataCacheMap.delete(key);
     }
-    const privateKey = credentials.private_key.replace(/\\n/g, "\n");
-    const auth = new google.auth.JWT({
-      email: credentials.client_email,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
-    sheetsClient = google.sheets({ version: "v4", auth });
   }
-  return sheetsClient;
 }
 
-let judgmentSheetIdCache: number | null = null;
-let isJudgmentSheetReadyCache = false;
-
-// In-memory data cache
-let judgmentDataCache: { id: number; values: JudgmentRow }[] | null = null;
-let lastJudgmentCacheTime = 0;
-const JUDGMENT_CACHE_TTL_MS = 15000; // 15 seconds
-
-export function invalidateJudgmentCache(): void {
-  judgmentDataCache = null;
-  lastJudgmentCacheTime = 0;
+function padJudgmentCells(values: JudgmentRow): JudgmentRow {
+  const copy = [...values];
+  while (copy.length < JUDGMENT_COLS) {
+    copy.push("");
+  }
+  return copy.slice(0, JUDGMENT_COLS);
 }
 
-async function getJudgmentSheetId(): Promise<number> {
-  if (judgmentSheetIdCache !== null) return judgmentSheetIdCache;
-  const sheets = getClient();
-  const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: env.googleSpreadsheetId,
+async function resolveJudgmentTabTitle(context: {
+  sheets: sheets_v4.Sheets;
+  spreadsheetId: string;
+}): Promise<string> {
+  const spreadsheet = await context.sheets.spreadsheets.get({
+    spreadsheetId: context.spreadsheetId,
   });
-  const sheet = spreadsheet.data.sheets?.find(
-    (s) => s.properties?.title === JUDGMENT_SHEET_NAME,
-  );
-  if (!sheet?.properties && sheet?.properties?.sheetId === undefined) {
-    throw new Error(`Sheet tab "${JUDGMENT_SHEET_NAME}" not found.`);
-  }
-  judgmentSheetIdCache = sheet!.properties!.sheetId!;
-  return judgmentSheetIdCache;
+  const titles =
+    spreadsheet.data.sheets?.map((s) => s.properties?.title || "").filter(Boolean) || [];
+  if (titles.includes(JUDGMENT_SHEET_NAME)) return JUDGMENT_SHEET_NAME;
+  if (titles.includes(LEGACY_JUDGMENTS_SHEET_NAME)) return LEGACY_JUDGMENTS_SHEET_NAME;
+  return JUDGMENT_SHEET_NAME;
 }
 
-/** Ensures the "Judgment" sheet tab exists with the correct header row and text formatting. */
-export async function ensureJudgmentSheetReady(): Promise<void> {
-  if (isJudgmentSheetReadyCache) return;
+/**
+ * Ensures the Judgment sheet tab exists with canonical headers.
+ * IMPORTANT: Called ONLY before write operations — NEVER during GET reads!
+ */
+export async function ensureJudgmentSheetReady(userId?: string): Promise<string> {
+  const context = await getGoogleContext(userId);
+  if (!context) return JUDGMENT_SHEET_NAME;
 
   try {
-    const sheets = getClient();
-    const spreadsheet = await sheets.spreadsheets.get({
-      spreadsheetId: env.googleSpreadsheetId,
+    const spreadsheet = await context.sheets.spreadsheets.get({
+      spreadsheetId: context.spreadsheetId,
     });
-    const existing = spreadsheet.data.sheets?.find(
-      (s) => s.properties?.title === JUDGMENT_SHEET_NAME,
-    );
+    const titles =
+      spreadsheet.data.sheets?.map((s) => s.properties?.title || "").filter(Boolean) || [];
+    let tabTitle = JUDGMENT_SHEET_NAME;
 
-    if (!existing) {
-      const addRes = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: env.googleSpreadsheetId,
+    if (titles.includes(JUDGMENT_SHEET_NAME)) {
+      tabTitle = JUDGMENT_SHEET_NAME;
+    } else if (titles.includes(LEGACY_JUDGMENTS_SHEET_NAME)) {
+      tabTitle = LEGACY_JUDGMENTS_SHEET_NAME;
+    } else {
+      await context.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: context.spreadsheetId,
         requestBody: {
           requests: [{ addSheet: { properties: { title: JUDGMENT_SHEET_NAME } } }],
         },
       });
-      judgmentSheetIdCache = addRes.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
-      logger.info(`Created sheet tab "${JUDGMENT_SHEET_NAME}"`);
-    } else {
-      judgmentSheetIdCache = existing.properties?.sheetId ?? null;
     }
 
-    // 1. Ensure Header row 1 is updated to JUDGMENT_SHEET_COLUMNS
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: env.googleSpreadsheetId,
-      range: `${JUDGMENT_SHEET_NAME}!A1:${COL_LAST}1`,
-      valueInputOption: "RAW",
-      requestBody: { values: [[...JUDGMENT_SHEET_COLUMNS]] },
+    const headerRes = await context.sheets.spreadsheets.values.get({
+      spreadsheetId: context.spreadsheetId,
+      range: `${tabTitle}!A1:${COL_DATA_LAST}1`,
     });
-
-    // 2. Format cells explicitly so text color is BLACK on white background for data rows,
-    //    preventing Google Sheets from making text white.
-    if (judgmentSheetIdCache !== null) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: env.googleSpreadsheetId,
-        requestBody: {
-          requests: [
-            // Row 1 (Header): Dark Navy fill, white text, bold
-            {
-              repeatCell: {
-                range: {
-                  sheetId: judgmentSheetIdCache,
-                  startRowIndex: 0,
-                  endRowIndex: 1,
-                  startColumnIndex: 0,
-                  endColumnIndex: JUDGMENT_COLS,
-                },
-                cell: {
-                  userEnteredFormat: {
-                    backgroundColor: { red: 0.1, green: 0.15, blue: 0.25 },
-                    textFormat: {
-                      foregroundColor: { red: 1, green: 1, blue: 1 },
-                      bold: true,
-                      fontSize: 10,
-                    },
-                    horizontalAlignment: "CENTER",
-                    verticalAlignment: "MIDDLE",
-                  },
-                },
-                fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
-              },
-            },
-            // Rows 2..1000 (Data): White fill, BLACK text, normal
-            {
-              repeatCell: {
-                range: {
-                  sheetId: judgmentSheetIdCache,
-                  startRowIndex: 1,
-                  endRowIndex: 1000,
-                  startColumnIndex: 0,
-                  endColumnIndex: JUDGMENT_COLS,
-                },
-                cell: {
-                  userEnteredFormat: {
-                    backgroundColor: { red: 1, green: 1, blue: 1 },
-                    textFormat: {
-                      foregroundColor: { red: 0, green: 0, blue: 0 },
-                      bold: false,
-                      fontSize: 10,
-                    },
-                    horizontalAlignment: "RIGHT",
-                    verticalAlignment: "MIDDLE",
-                  },
-                },
-                fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
-              },
-            },
-          ],
-        },
+    const currentHeader = headerRes.data.values?.[0] ?? [];
+    if (currentHeader.length < JUDGMENT_COLS || currentHeader[0] !== JUDGMENT_SHEET_COLUMNS[0]) {
+      await context.sheets.spreadsheets.values.update({
+        spreadsheetId: context.spreadsheetId,
+        range: `${tabTitle}!A1:${COL_DATA_LAST}1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [[...JUDGMENT_SHEET_COLUMNS]] },
       });
     }
-
-    isJudgmentSheetReadyCache = true;
-  } catch (err) {
-    isJudgmentSheetReadyCache = false;
-    logger.warn({ err }, "ensureJudgmentSheetReady non-fatal warning");
+    return tabTitle;
+  } catch (err: any) {
+    logger.error({ code: err?.code, officeId: context.officeId }, "ensureJudgmentSheetReady failed");
+    throw new ExternalServiceError("تعذر تهيئة ورقة الأحكام في Google Sheets.");
   }
 }
 
-export type JudgmentRow = string[];
-
-/** Returns all Judgment records (excluding header row), using in-memory cache if fresh. */
-export async function listJudgmentRows(forceRefresh = false): Promise<{ id: number; values: JudgmentRow }[]> {
+export async function listJudgmentRecordsWithMeta(
+  forceRefresh = false,
+  userId?: string,
+  includeDeleted = false,
+): Promise<{ records: StoredJudgmentRecord[]; syncedAt: string }> {
+  const scope = await resolveOfficeScope(userId);
+  const cacheKey = scope.officeId;
   const now = Date.now();
-  if (!forceRefresh && judgmentDataCache !== null && now - lastJudgmentCacheTime < JUDGMENT_CACHE_TTL_MS) {
-    return judgmentDataCache;
+  const cached = judgmentDataCacheMap.get(cacheKey);
+
+  if (!forceRefresh && cached && now - cached.time < JUDGMENT_CACHE_TTL_MS) {
+    const filtered = includeDeleted
+      ? cached.records
+      : cached.records.filter((r) => !r.meta.deletedAt);
+    return { records: filtered, syncedAt: cached.syncedAt };
   }
 
-  await ensureJudgmentSheetReady();
+  const context = await getGoogleContext(userId);
+  if (context) {
+    try {
+      const tabTitle = await resolveJudgmentTabTitle(context);
+      const response = await context.sheets.spreadsheets.values.get({
+        spreadsheetId: context.spreadsheetId,
+        range: `${tabTitle}!A2:${COL_WITH_META_LAST}${MAX_BOUNDED_ROWS}`,
+      });
+      const rows = response.data.values ?? [];
+      const records: StoredJudgmentRecord[] = [];
 
-  try {
-    const sheets = getClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: env.googleSpreadsheetId,
-      range: `${JUDGMENT_SHEET_NAME}!A2:${COL_LAST}`,
-    });
-    const rows = response.data.values ?? [];
-    const result = rows
-      .map((row, index) => ({ id: index + 2, values: row as JudgmentRow }))
-      .filter((row) => row.values.some((cell) => cell !== undefined && cell !== ""));
-    
-    judgmentDataCache = result;
-    lastJudgmentCacheTime = now;
-    return result;
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch Judgment rows from Google Sheets, returning cached/empty");
-    return judgmentDataCache ?? [];
+      for (let i = 0; i < rows.length; i++) {
+        const fullRow = rows[i] as string[];
+        const dataCells = padJudgmentCells(fullRow);
+        const hasContent = dataCells.some((cell) => cell !== undefined && cell !== "");
+        const rawMetaCell = fullRow[JUDGMENT_META_COL_INDEX];
+        if (!hasContent && !rawMetaCell) continue;
+
+        const meta = parseRowMeta(rawMetaCell, dataCells, scope.officeId);
+        if (!isRowOwnedByOffice(meta, scope.officeId)) continue;
+
+        records.push({
+          id: meta.id,
+          physicalRowNumber: i + 2,
+          values: dataCells,
+          meta,
+        });
+      }
+
+      const syncedAt = new Date().toISOString();
+      judgmentDataCacheMap.set(cacheKey, { syncedAt, time: now, records });
+      const filtered = includeDeleted
+        ? records
+        : records.filter((r) => !r.meta.deletedAt);
+      return { records: filtered, syncedAt };
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      if (msg.includes("Unable to parse range") || err?.code === 400) {
+        const syncedAt = new Date().toISOString();
+        return { records: [], syncedAt };
+      }
+      logger.error(
+        { code: err?.code, officeId: scope.officeId },
+        "Failed to fetch judgment rows from Google Sheets",
+      );
+      throw new ExternalServiceError(
+        "تعذر قراءة سجل الأحكام من Google Sheets. يرجى التحقق من اتصال الجدول وصلاحيات الوصول.",
+      );
+    }
   }
+
+  const stored = readOfficeLocalRows<{ id: number; values: JudgmentRow; meta?: SheetRowMeta }>(
+    "judgments",
+    scope.officeId,
+  );
+  const records: StoredJudgmentRecord[] = stored
+    .map((item, idx) => {
+      const dataCells = padJudgmentCells(item.values || []);
+      const meta =
+        item.meta ??
+        parseRowMeta(item.values?.[JUDGMENT_META_COL_INDEX], dataCells, scope.officeId);
+      if (item.id && !item.meta) meta.id = item.id;
+      return {
+        id: meta.id,
+        physicalRowNumber: idx + 2,
+        values: dataCells,
+        meta,
+      };
+    })
+    .filter((r) => isRowOwnedByOffice(r.meta, scope.officeId));
+
+  const syncedAt = new Date().toISOString();
+  judgmentDataCacheMap.set(cacheKey, { syncedAt, time: now, records });
+  const filtered = includeDeleted
+    ? records
+    : records.filter((r) => !r.meta.deletedAt);
+  return { records: filtered, syncedAt };
 }
 
-/** Fetches both headers and data rows in a single API call, using in-memory cache if fresh. */
-export async function listJudgmentRowsWithHeaders(forceRefresh = false): Promise<{
+export async function listJudgmentRows(
+  forceRefresh = false,
+  userId?: string,
+): Promise<{ id: number; values: JudgmentRow; meta: SheetRowMeta }[]> {
+  const { records } = await listJudgmentRecordsWithMeta(forceRefresh, userId, false);
+  return records.map((r) => ({ id: r.id, values: r.values, meta: r.meta }));
+}
+
+export async function listJudgmentRowsWithHeaders(
+  forceRefresh = false,
+  userId?: string,
+): Promise<{
   headers: string[];
-  rows: { id: number; values: JudgmentRow }[];
+  rows: { id: number; values: JudgmentRow; meta: SheetRowMeta }[];
+  syncedAt: string;
 }> {
-  await ensureJudgmentSheetReady();
+  const { records, syncedAt } = await listJudgmentRecordsWithMeta(forceRefresh, userId, false);
+  return {
+    headers: [...JUDGMENT_SHEET_COLUMNS],
+    rows: records.map((r) => ({ id: r.id, values: r.values, meta: r.meta })),
+    syncedAt,
+  };
+}
 
-  const now = Date.now();
-  const useCache =
-    !forceRefresh &&
-    judgmentDataCache !== null &&
-    now - lastJudgmentCacheTime < JUDGMENT_CACHE_TTL_MS;
+export async function appendJudgmentRow(
+  values: JudgmentRow,
+  userId?: string,
+  extraMeta?: Partial<SheetRowMeta>,
+): Promise<number> {
+  const scope = await resolveOfficeScope(userId);
+  const lockKey = `judgments:${scope.officeId}`;
 
-  try {
-    const sheets = getClient();
+  return withSheetLock(lockKey, async () => {
+    invalidateJudgmentCache(scope.officeId);
+    const meta = createNewRowMeta(scope.officeId, scope.userId, extraMeta);
+    const dataCells = padJudgmentCells(values);
+    const rowWithMeta = [...dataCells, serializeRowMeta(meta)];
 
-    if (useCache) {
-      // Fetch row 1 only for headers when using cache
-      const headerRes = await sheets.spreadsheets.values.get({
-        spreadsheetId: env.googleSpreadsheetId,
-        range: `${JUDGMENT_SHEET_NAME}!A1:${COL_LAST}1`,
-      });
-      const headers = ((headerRes.data.values?.[0] as string[]) ?? [...JUDGMENT_SHEET_COLUMNS]);
-      return { headers, rows: judgmentDataCache! };
+    const context = await getGoogleContext(userId);
+    if (context) {
+      const tabTitle = await ensureJudgmentSheetReady(userId);
+      try {
+        await context.sheets.spreadsheets.values.append({
+          spreadsheetId: context.spreadsheetId,
+          range: `${tabTitle}!A:${COL_WITH_META_LAST}`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values: [rowWithMeta] },
+        });
+        invalidateJudgmentCache(scope.officeId);
+        return meta.id;
+      } catch (err: any) {
+        logger.error(
+          { code: err?.code, officeId: scope.officeId },
+          "Google Sheets appendJudgmentRow failed",
+        );
+        throw new ExternalServiceError("فشل حفظ الحكم في Google Sheets.");
+      }
     }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: env.googleSpreadsheetId,
-      range: `${JUDGMENT_SHEET_NAME}!A1:${COL_LAST}`,
-    });
-    const data = response.data.values ?? [];
-    const headers = (data[0] as string[]) ?? [...JUDGMENT_SHEET_COLUMNS];
-    const dataRows = data.slice(1);
-    const rows = dataRows
-      .map((row, index) => ({ id: index + 2, values: row as JudgmentRow }))
-      .filter((row) => row.values.some((cell) => cell !== undefined && cell !== ""));
+    const local = readOfficeLocalRows<{ id: number; values: JudgmentRow; meta: SheetRowMeta }>(
+      "judgments",
+      scope.officeId,
+    );
+    local.push({ id: meta.id, values: dataCells, meta });
+    writeOfficeLocalRows("judgments", scope.officeId, local);
+    invalidateJudgmentCache(scope.officeId);
+    return meta.id;
+  });
+}
 
-    judgmentDataCache = rows;
-    lastJudgmentCacheTime = now;
-    return { headers, rows };
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch Judgment rows from Google Sheets, returning cached/empty");
-    return {
-      headers: [...JUDGMENT_SHEET_COLUMNS],
-      rows: judgmentDataCache ?? [],
+export async function updateJudgmentRow(
+  stableId: number,
+  values: JudgmentRow,
+  userId?: string,
+  metaPatch?: Partial<SheetRowMeta>,
+): Promise<void> {
+  const scope = await resolveOfficeScope(userId);
+  const lockKey = `judgments:${scope.officeId}`;
+
+  await withSheetLock(lockKey, async () => {
+    invalidateJudgmentCache(scope.officeId);
+    const { records } = await listJudgmentRecordsWithMeta(true, userId, true);
+    const target = records.find((r) => r.id === stableId);
+    if (!target) {
+      throw new NotFoundError("الحكم غير موجود أو لا يتبع لهذا المكتب.");
+    }
+
+    const updatedMeta: SheetRowMeta = {
+      ...target.meta,
+      ...metaPatch,
+      id: target.meta.id,
+      recordId: target.meta.recordId,
+      officeId: scope.officeId,
+      updatedAt: new Date().toISOString(),
     };
+    const dataCells = padJudgmentCells(values);
+    const rowWithMeta = [...dataCells, serializeRowMeta(updatedMeta)];
+
+    const context = await getGoogleContext(userId);
+    if (context) {
+      try {
+        const tabTitle = await resolveJudgmentTabTitle(context);
+        const rowNum = target.physicalRowNumber;
+        await context.sheets.spreadsheets.values.update({
+          spreadsheetId: context.spreadsheetId,
+          range: `${tabTitle}!A${rowNum}:${COL_WITH_META_LAST}${rowNum}`,
+          valueInputOption: "RAW",
+          requestBody: { values: [rowWithMeta] },
+        });
+        invalidateJudgmentCache(scope.officeId);
+        return;
+      } catch (err: any) {
+        logger.error(
+          { code: err?.code, officeId: scope.officeId },
+          "Google Sheets updateJudgmentRow failed",
+        );
+        throw new ExternalServiceError("فشل تحديث بيانات الحكم في Google Sheets.");
+      }
+    }
+
+    const local = readOfficeLocalRows<{ id: number; values: JudgmentRow; meta: SheetRowMeta }>(
+      "judgments",
+      scope.officeId,
+    );
+    const idx = local.findIndex((r) => (r.meta?.id ?? r.id) === stableId);
+    if (idx === -1) {
+      throw new NotFoundError("الحكم غير موجود.");
+    }
+    local[idx] = { id: stableId, values: dataCells, meta: updatedMeta };
+    writeOfficeLocalRows("judgments", scope.officeId, local);
+    invalidateJudgmentCache(scope.officeId);
+  });
+}
+
+export async function deleteJudgmentRow(stableId: number, userId?: string): Promise<boolean> {
+  const scope = await resolveOfficeScope(userId);
+  const { records } = await listJudgmentRecordsWithMeta(true, userId, false);
+  const target = records.find((r) => r.id === stableId);
+  if (!target) {
+    return false;
   }
+  await updateJudgmentRow(stableId, target.values, userId, {
+    deletedAt: new Date().toISOString(),
+    deletedBy: scope.userId,
+  });
+  return true;
 }
 
-/** Appends a new Judgment record row and returns its 1-based row id.
- *  Uses OVERWRITE (not INSERT_ROWS) to avoid inheriting cell formatting
- *  from the row above, which would make text appear white on a white background.
- */
-export async function appendJudgmentRow(values: JudgmentRow): Promise<number> {
-  invalidateJudgmentCache();
-  const sheets = getClient();
-  // Pad the row to exactly JUDGMENT_COLS so we always write all 10 columns
-  const paddedValues: string[] = Array.from({ length: JUDGMENT_COLS }, (_, i) => values[i] ?? "");
-  const response = await sheets.spreadsheets.values.append({
-    spreadsheetId: env.googleSpreadsheetId,
-    range: `${JUDGMENT_SHEET_NAME}!A:${COL_LAST}`,
-    valueInputOption: "RAW",
-    insertDataOption: "OVERWRITE", // OVERWRITE avoids inheriting header row's white-text formatting
-    requestBody: { values: [paddedValues] },
+export async function restoreJudgmentRow(stableId: number, userId?: string): Promise<boolean> {
+  const { records } = await listJudgmentRecordsWithMeta(true, userId, true);
+  const target = records.find((r) => r.id === stableId && Boolean(r.meta.deletedAt));
+  if (!target) {
+    return false;
+  }
+  await updateJudgmentRow(stableId, target.values, userId, {
+    deletedAt: null,
+    deletedBy: null,
   });
-  const updatedRange = response.data.updates?.updatedRange;
-  const match = updatedRange?.match(/![A-Z]+(\d+):/);
-  if (match) return Number(match[1]);
-  const { rows } = await listJudgmentRowsWithHeaders();
-  const last = rows[rows.length - 1];
-  if (!last) throw new Error("Failed to determine id of newly created Judgment row.");
-  return last.id;
-}
-
-/** Updates an existing Judgment row by its 1-based row id. */
-export async function updateJudgmentRow(id: number, values: JudgmentRow): Promise<void> {
-  invalidateJudgmentCache();
-  const sheets = getClient();
-  // Always write exactly JUDGMENT_COLS columns to avoid leaving stale values
-  const paddedValues: string[] = Array.from({ length: JUDGMENT_COLS }, (_, i) => values[i] ?? "");
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: env.googleSpreadsheetId,
-    range: `${JUDGMENT_SHEET_NAME}!A${id}:${COL_LAST}${id}`,
-    valueInputOption: "RAW",
-    requestBody: { values: [paddedValues] },
-  });
-}
-
-
-/** Deletes a Judgment row by its 1-based row id. */
-export async function deleteJudgmentRow(id: number): Promise<void> {
-  invalidateJudgmentCache();
-  const sheets = getClient();
-  const sheetId = await getJudgmentSheetId();
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: env.googleSpreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          deleteDimension: {
-            range: {
-              sheetId,
-              dimension: "ROWS",
-              startIndex: id - 1,
-              endIndex: id,
-            },
-          },
-        },
-      ],
-    },
-  });
+  return true;
 }

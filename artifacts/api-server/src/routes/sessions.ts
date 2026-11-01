@@ -1,167 +1,243 @@
 import { Router, type IRouter } from "express";
 import {
+  z,
   CreateSessionBody,
-  CreateSessionResponse,
   ListSessionsQueryParams,
-  ListSessionsResponse,
   UpdateSessionBody,
-  UpdateSessionResponse,
-  GetSessionResponse,
 } from "@workspace/api-zod";
 import {
   createSession,
   deleteSession,
+  detectSessionConflicts,
   getSessionById,
   listSessions,
   updateSession,
   computeDaysRemainingStr,
 } from "../services/session.service";
-import { isGoogleSheetsConfigured } from "../config/env";
-import { logger } from "../lib/logger";
-import { attachAuthUser, requireAuth, requireActiveSubscription } from "../middlewares/auth.middleware";
+import {
+  attachAuthUser,
+  requireAuth,
+  requireActiveSubscription,
+} from "../middlewares/auth.middleware";
 import { WhatsappReminderChannel } from "../services/reminder/channels/whatsappChannel";
 import { computeHearingDateTime } from "../utils/hijri";
+import {
+  normalizeNumericDigits,
+  validateAndNormalizeCourtDate,
+} from "../utils/dateNormalize";
+import {
+  getIdempotentResult,
+  setIdempotentResult,
+} from "../utils/sheetMeta";
+import { recordAuditEvent } from "../services/audit.service";
+import { NotFoundError, ValidationError, formatZodErrorArabic } from "../lib/errors";
 
 const router: IRouter = Router();
 
-// Stop all Excel Sheet read/write operations if the user's subscription is suspended or expired
 router.use(attachAuthUser, requireAuth, requireActiveSubscription);
 
-function unconfiguredResponse(): { error: string } {
-  return {
-    error:
-      "Google Sheets is not configured yet. Set GOOGLE_SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_JSON.",
-  };
+function parsePositiveId(raw: unknown): number {
+  const str = Array.isArray(raw) ? raw[0] : raw;
+  const normalized = normalizeNumericDigits(String(str || "")).trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new ValidationError("معرّف الجلسة غير صالح.");
+  }
+  const id = Number(normalized);
+  if (!Number.isSafeInteger(id) || id < 1) {
+    throw new ValidationError("معرّف الجلسة خارج النطاق المسموح.");
+  }
+  return id;
 }
 
-router.get("/sessions", async (req, res) => {
-  const parseResult = ListSessionsQueryParams.safeParse(req.query);
-  if (!parseResult.success) {
-    res.status(400).json({ error: "Invalid status filter." });
-    return;
-  }
-  try {
-    const userId = req.authUser?.userId;
-    const sessions = await listSessions(parseResult.data.status, userId);
-    const data = ListSessionsResponse.parse(sessions);
-    res.json(data);
-  } catch (err: any) {
-    logger.error({ err }, "Failed to list sessions");
-    const isClockError = String(err?.message || "").includes("invalid_grant") || String(err?.stack || "").includes("invalid_grant");
-    const errorMsg = isClockError
-      ? "فشل الاتصال بـ Google Sheets بسبب عدم تزامن تاريخ وتوقيت الجهاز مع سيرفرات Google (invalid_grant)."
-      : (err?.message || "فشل تحميل قائمة الجلسات.");
-    res.status(500).json({ error: errorMsg });
-  }
+const ExtraSessionFieldsSchema = z.object({
+  assignedLawyer: z.string().max(150).optional().nullable(),
+  assigneeId: z.string().max(120).optional().nullable(),
+  caseId: z.string().max(120).optional().nullable(),
 });
 
-router.post("/sessions", attachAuthUser, requireAuth, async (req, res) => {
-  const parseResult = CreateSessionBody.safeParse(req.body);
-  if (!parseResult.success) {
-    res.status(400).json({ error: "بيانات الجلسة غير صالحة." });
-    return;
-  }
-  const { caseNumber, court, sessionDateHijri } = parseResult.data;
-  if (!caseNumber?.trim() || !court?.trim() || !sessionDateHijri?.trim()) {
-    res.status(400).json({
-      error: "رقم القضية، المحكمة، وتاريخ الجلسة حقول إلزامية لحفظ الجلسة في النظام.",
-    });
-    return;
-  }
+router.get("/sessions", async (req, res, next) => {
   try {
-    const userId = req.authUser?.userId;
-    const session = await createSession(parseResult.data, userId);
-    const data = CreateSessionResponse.parse(session);
-    res.status(201).json(data);
-  } catch (err: any) {
-    logger.error({ err }, "Failed to create session");
-    res.status(500).json({ error: err?.message || "فشل إنشاء الجلسة." });
-  }
-});
-
-router.get("/sessions/:id", attachAuthUser, requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) {
-    res.status(400).json({ error: "Invalid session id." });
-    return;
-  }
-  try {
-    const userId = req.authUser?.userId;
-    const session = await getSessionById(id, userId);
-    if (!session) {
-      res.status(404).json({ error: "Session not found." });
-      return;
+    const parseResult = ListSessionsQueryParams.safeParse(req.query);
+    if (!parseResult.success) {
+      throw new ValidationError("معيار تصفية حالة الجلسة غير صالح.");
     }
-    const data = GetSessionResponse.parse(session);
-    res.json(data);
-  } catch (err: any) {
-    logger.error({ err }, "Failed to load session");
-    res.status(500).json({ error: err?.message || "فشل تحميل الجلسة." });
-  }
-});
-
-router.patch("/sessions/:id", attachAuthUser, requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) {
-    res.status(400).json({ error: "Invalid session id." });
-    return;
-  }
-  const parseResult = UpdateSessionBody.safeParse(req.body);
-  if (!parseResult.success) {
-    res.status(400).json({ error: "Invalid session data." });
-    return;
-  }
-  try {
-    const userId = req.authUser?.userId;
-    const session = await updateSession(id, parseResult.data, userId);
-    if (!session) {
-      res.status(404).json({ error: "Session not found." });
-      return;
-    }
-    const data = UpdateSessionResponse.parse(session);
-    res.json(data);
-  } catch (err: any) {
-    logger.error({ err }, "Failed to update session");
-    res.status(500).json({ error: err?.message || "فشل تحديث الجلسة." });
-  }
-});
-
-router.delete("/sessions/:id", attachAuthUser, requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) {
-    res.status(400).json({ error: "Invalid session id." });
-    return;
-  }
-  try {
-    const userId = req.authUser?.userId;
-    const deleted = await deleteSession(id, userId);
-    if (!deleted) {
-      res.status(404).json({ error: "Session not found." });
-      return;
-    }
-    res.status(204).send();
-  } catch (err: any) {
-    logger.error({ err }, "Failed to delete session");
-    res.status(500).json({ error: err?.message || "فشل حذف الجلسة." });
+    const sessions = await listSessions(parseResult.data.status, req.userId);
+    res.setHeader("X-Synced-At", new Date().toISOString());
+    res.json(sessions);
+  } catch (err) {
+    next(err);
   }
 });
 
 /**
- * POST /api/sessions/:id/send-whatsapp
- * Dispatches an instant WhatsApp reminder with session details and calculated remaining time.
+ * POST /api/sessions/check-conflicts
+ * Live conflict check before saving a session.
  */
-router.post("/sessions/:id/send-whatsapp", attachAuthUser, requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) {
-    res.status(400).json({ error: "Invalid session id." });
-    return;
-  }
+router.post("/sessions/check-conflicts", async (req, res, next) => {
   try {
-    const userId = req.authUser?.userId;
-    const session = await getSessionById(id, userId);
+    const { sessionDateHijri, sessionTime, assignedLawyer, excludeId } = req.body || {};
+    const conflicts = await detectSessionConflicts(req.userId, {
+      sessionDateHijri: sessionDateHijri ? String(sessionDateHijri) : null,
+      sessionTime: sessionTime ? String(sessionTime) : null,
+      assignedLawyer: assignedLawyer ? String(assignedLawyer) : null,
+      excludeId: excludeId ? Number(excludeId) : undefined,
+    });
+    res.json({ hasConflict: conflicts.length > 0, conflicts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/sessions", async (req, res, next) => {
+  try {
+    const idempotencyKey = String(req.headers["x-idempotency-key"] || "").trim();
+    if (idempotencyKey && req.officeId) {
+      const cached = getIdempotentResult(`session:${req.officeId}:${idempotencyKey}`);
+      if (cached) {
+        res.status(201).json(cached);
+        return;
+      }
+    }
+
+    const parseResult = CreateSessionBody.safeParse(req.body);
+    if (!parseResult.success) {
+      throw new ValidationError(formatZodErrorArabic(parseResult.error));
+    }
+    const extra = ExtraSessionFieldsSchema.safeParse(req.body);
+    const { caseNumber, court, sessionDateHijri } = parseResult.data;
+
+    if (!caseNumber?.trim() || !court?.trim() || !sessionDateHijri?.trim()) {
+      throw new ValidationError(
+        "رقم القضية، المحكمة، وتاريخ الجلسة حقول إلزامية لحفظ الجلسة في النظام.",
+      );
+    }
+
+    const validatedDate = validateAndNormalizeCourtDate(sessionDateHijri, {
+      fieldName: "تاريخ الجلسة",
+      required: true,
+    });
+
+    const payload = {
+      ...parseResult.data,
+      caseNumber: normalizeNumericDigits(caseNumber.trim()),
+      court: court.trim(),
+      sessionDateHijri: validatedDate || normalizeNumericDigits(sessionDateHijri.trim()),
+      sessionTime: parseResult.data.sessionTime
+        ? normalizeNumericDigits(parseResult.data.sessionTime.trim())
+        : null,
+      assignedLawyer: extra.success ? extra.data.assignedLawyer : null,
+      assigneeId: extra.success ? extra.data.assigneeId : null,
+      caseId: extra.success ? extra.data.caseId : null,
+    };
+
+    const session = await createSession(payload, req.userId);
+
+    if (idempotencyKey && req.officeId) {
+      setIdempotentResult(`session:${req.officeId}:${idempotencyKey}`, session);
+    }
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: req.officeId!,
+      action: "session.create",
+      entityType: "session",
+      entityId: String(session.id),
+      summary: `إضافة جلسة قضائية للقضية (${session.caseNumber})`,
+    });
+
+    res.status(201).json(session);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/sessions/:id", async (req, res, next) => {
+  try {
+    const id = parsePositiveId(req.params.id);
+    const session = await getSessionById(id, req.userId);
     if (!session) {
-      res.status(404).json({ error: "الجلسة غير موجودة." });
-      return;
+      throw new NotFoundError("الجلسة غير موجودة.");
+    }
+    res.json(session);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/sessions/:id", async (req, res, next) => {
+  try {
+    const id = parsePositiveId(req.params.id);
+    const parseResult = UpdateSessionBody.safeParse(req.body);
+    if (!parseResult.success) {
+      throw new ValidationError(formatZodErrorArabic(parseResult.error));
+    }
+    const extra = ExtraSessionFieldsSchema.safeParse(req.body);
+
+    const patchData: any = { ...parseResult.data };
+    if (patchData.sessionDateHijri !== undefined && patchData.sessionDateHijri !== null) {
+      patchData.sessionDateHijri = validateAndNormalizeCourtDate(patchData.sessionDateHijri, {
+        fieldName: "تاريخ الجلسة",
+        required: true,
+      });
+    }
+    if (extra.success) {
+      if (extra.data.assignedLawyer !== undefined) patchData.assignedLawyer = extra.data.assignedLawyer;
+      if (extra.data.assigneeId !== undefined) patchData.assigneeId = extra.data.assigneeId;
+      if (extra.data.caseId !== undefined) patchData.caseId = extra.data.caseId;
+    }
+
+    const session = await updateSession(id, patchData, req.userId);
+    if (!session) {
+      throw new NotFoundError("الجلسة غير موجودة.");
+    }
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: req.officeId!,
+      action: "session.update",
+      entityType: "session",
+      entityId: String(id),
+      summary: `تحديث بيانات الجلسة #${id}`,
+    });
+
+    res.json(session);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/sessions/:id", async (req, res, next) => {
+  try {
+    const id = parsePositiveId(req.params.id);
+    const deleted = await deleteSession(id, req.userId);
+    if (!deleted) {
+      throw new NotFoundError("الجلسة غير موجودة.");
+    }
+
+    await recordAuditEvent({
+      actorId: req.userId!,
+      actorUsername: req.user || "",
+      officeId: req.officeId!,
+      action: "session.delete",
+      entityType: "session",
+      entityId: String(id),
+      summary: `نقل الجلسة #${id} إلى سلة المحذوفات`,
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/sessions/:id/send-whatsapp", async (req, res, next) => {
+  try {
+    const id = parsePositiveId(req.params.id);
+    const session = await getSessionById(id, req.userId);
+    if (!session) {
+      throw new NotFoundError("الجلسة غير موجودة.");
     }
 
     const hearingAt = computeHearingDateTime(session.sessionDateHijri, session.sessionTime);
@@ -189,9 +265,13 @@ router.post("/sessions/:id/send-whatsapp", attachAuthUser, requireAuth, async (r
       remainingText = `متبقي ${daysStr}`;
     }
 
+    const recipientPhone = req.userRecord?.whatsapp_number || null;
     const channel = new WhatsappReminderChannel();
     await channel.send({
       sessionId: session.id,
+      officeId: req.officeId,
+      userId: req.userId,
+      recipientPhone,
       caseNumber: session.caseNumber,
       sessionDateHijri: session.sessionDateHijri,
       sessionTime: session.sessionTime,
@@ -206,9 +286,10 @@ router.post("/sessions/:id/send-whatsapp", attachAuthUser, requireAuth, async (r
 
     res.json({ message: "تم إرسال تذكير الواتساب بنجاح!" });
   } catch (err: any) {
-    logger.error({ err, id }, "Failed to send instant WhatsApp reminder");
-    const errMsg = err?.message || "فشل إرسال تذكير الواتساب.";
-    res.status(400).json({ error: errMsg });
+    res.status(400).json({
+      error: err?.message || "فشل إرسال تذكير الواتساب.",
+      code: "WHATSAPP_SEND_FAILED",
+    });
   }
 });
 

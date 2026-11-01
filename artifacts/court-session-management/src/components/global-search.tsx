@@ -10,8 +10,9 @@ import {
   CommandItem,
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
-import { Search, Scale, FileText, LayoutDashboard, MessageSquare, Calendar, Settings, ArrowLeft, ShieldCheck, Gavel, CheckSquare, Users } from 'lucide-react';
+import { Search, Scale, FileText, LayoutDashboard, MessageSquare, Calendar, Settings, ArrowLeft, ShieldCheck, Gavel, CheckSquare, Users, Briefcase, UserCheck } from 'lucide-react';
 import { getArabicDayName } from '@/lib/hijri';
+import { readUserScopedJson } from '@/lib/user-storage';
 
 interface GlobalSearchProps {
   /** Optional custom trigger render or trigger button class */
@@ -25,15 +26,16 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
   const { data: currentUser } = useGetCurrentUser();
   const [poaRecords, setPoaRecords] = useState<any[]>([]);
 
-  // Load POAs from local storage when search opens
+  // Load POAs from account/office-scoped local storage when search opens
   useEffect(() => {
-    if (open) {
-      try {
-        const raw = localStorage.getItem('legal_poa_records_v1');
-        if (raw) setPoaRecords(JSON.parse(raw));
-      } catch {}
+    if (open && currentUser) {
+      const confirmed = readUserScopedJson<any[]>('poa_confirmed', currentUser as any, []);
+      const pending = readUserScopedJson<any[]>('poa_pending_sync', currentUser as any, []);
+      setPoaRecords([...pending, ...confirmed]);
+    } else if (!currentUser) {
+      setPoaRecords([]);
     }
-  }, [open]);
+  }, [open, currentUser]);
 
   // Listen for Ctrl+K or Cmd+K shortcut globally
   useEffect(() => {
@@ -91,6 +93,42 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
 
             {/* Quick Navigation Pages */}
             <CommandGroup heading="أقسام النظام والتنقل السريع">
+              <CommandItem
+                value="العملاء موكلين موكل شركات أفراد سجل العملاء clients"
+                onSelect={() => handleSelect('/clients')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Users className="w-4 h-4 text-primary" />
+                  <span className="font-semibold text-sm">سجل العملاء والموكلين</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/clients</span>
+              </CommandItem>
+
+              <CommandItem
+                value="ملفات القضايا ملف قضية قضايا دعوى دعاوى ابتدائية استئناف تنفيذ cases"
+                onSelect={() => handleSelect('/cases')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Briefcase className="w-4 h-4 text-amber-500" />
+                  <span className="font-semibold text-sm">ملفات القضايا الموحدة</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/cases</span>
+              </CommandItem>
+
+              <CommandItem
+                value="فريق العمل الصلاحيات المحامين محامي مساعد محاسب team"
+                onSelect={() => handleSelect('/team')}
+                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <UserCheck className="w-4 h-4 text-emerald-600" />
+                  <span className="font-semibold text-sm">فريق العمل والصلاحيات</span>
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">/team</span>
+              </CommandItem>
+
               <CommandItem
                 value="الوكالات الوكالة وكالة شرعية إدارة الوكالات توكيل تفويض poa attorney"
                 onSelect={() => handleSelect('/poa')}
@@ -175,17 +213,19 @@ export function GlobalSearch({ className }: GlobalSearchProps) {
                 <span className="text-xs text-muted-foreground font-mono">/</span>
               </CommandItem>
 
-              <CommandItem
-                value="الإعدادات إعدادات النظام الربط مفاتيح الحساب settings"
-                onSelect={() => handleSelect('/settings')}
-                className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Settings className="w-4 h-4 text-muted-foreground" />
-                  <span className="font-semibold text-sm">إعدادات النظام والربط</span>
-                </div>
-                <span className="text-xs text-muted-foreground font-mono">/settings</span>
-              </CommandItem>
+              {isAdmin && (
+                <CommandItem
+                  value="الإعدادات إعدادات النظام الربط مفاتيح الحساب settings"
+                  onSelect={() => handleSelect('/settings')}
+                  className="cursor-pointer p-2.5 rounded-lg flex items-center justify-between hover:bg-accent transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Settings className="w-4 h-4 text-muted-foreground" />
+                    <span className="font-semibold text-sm">إعدادات النظام والربط</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground font-mono">/settings</span>
+                </CommandItem>
+              )}
 
               {isAdmin && (
                 <CommandItem

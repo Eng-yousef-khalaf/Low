@@ -1,53 +1,57 @@
+import crypto from "crypto";
 import { Router, type IRouter } from "express";
-import { env, isGoogleSheetsConfigured } from "../config/env";
+import { env } from "../config/env";
 import { logger } from "../lib/logger";
 import { runReminderSweep } from "../scheduler/reminderScheduler";
 
 const router: IRouter = Router();
 
+function safeCompareSecret(provided: string | null, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 /**
  * GET /api/cron/reminders
  *
- * Vercel Cron Job endpoint — invoked on the schedule defined in vercel.json.
- * Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` with every
- * cron request, so we validate that token before running the sweep.
- *
- * Can also be called manually (e.g. for testing) by passing the same bearer token.
+ * Protected by constant-time CRON_SECRET verification (`crypto.timingSafeEqual`).
+ * Fails closed whenever CRON_SECRET is unset in production (or when unset without admin session).
  */
 router.get("/cron/reminders", async (req, res) => {
-  // --- Authentication ---
   const secret = env.cronSecret;
-  if (secret) {
-    const authHeader = req.headers["authorization"] ?? "";
-    const provided = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : null;
-    if (provided !== secret) {
-      logger.warn({ ip: req.ip }, "Cron reminder endpoint: unauthorized request rejected");
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-  }
 
-  // --- Guard: sheets not configured yet ---
-  if (!isGoogleSheetsConfigured()) {
-    res
-      .status(503)
-      .json({ ok: false, message: "Google Sheets is not configured yet." });
+  if (!secret || secret.length < 12) {
+    logger.error("CRON_SECRET is missing or too short; rejecting cron invocation");
+    res.status(503).json({
+      ok: false,
+      error: "مسار الجدولة محمي ويتطلب ضبط متغير CRON_SECRET (12 حرفاً على الأقل) على الخادم.",
+      code: "CRON_SECRET_MISSING",
+    });
     return;
   }
 
-  // --- Run the sweep ---
+  const authHeader = req.headers["authorization"] ?? "";
+  const provided = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+
+  if (!safeCompareSecret(provided, secret)) {
+    logger.warn({ ip: req.ip }, "Cron reminder endpoint: unauthorized request rejected");
+    res.status(401).json({ ok: false, error: "غير مصرح بتشغيل مهمة الجدولة.", code: "UNAUTHORIZED" });
+    return;
+  }
+
   const startedAt = Date.now();
   try {
-    await runReminderSweep();
+    const summary = await runReminderSweep();
     const durationMs = Date.now() - startedAt;
-    logger.info({ durationMs }, "Cron reminder sweep completed successfully");
-    res.json({ ok: true, durationMs });
-  } catch (err) {
+    logger.info({ durationMs, ...summary }, "Cron reminder sweep completed");
+    res.json({ ok: true, durationMs, summary });
+  } catch (err: any) {
     const durationMs = Date.now() - startedAt;
-    logger.error({ err, durationMs }, "Cron reminder sweep failed");
-    res.status(500).json({ ok: false, error: "Reminder sweep failed." });
+    logger.error({ reason: err?.message, durationMs }, "Cron reminder sweep failed");
+    res.status(500).json({ ok: false, error: "فشل تنفيذ فحص التنبيهات المجدول." });
   }
 });
 

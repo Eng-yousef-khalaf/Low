@@ -1,18 +1,13 @@
 /**
- * Centralized, lazy access to environment variables / secrets.
- *
- * Nothing here throws at import time. Each getter is called only when the
- * feature that needs it actually runs, so the server can boot even if a
- * given integration (Google Sheets, OpenAI, login) has not been configured
- * yet. Callers get a clear, actionable error instead of a silent failure.
- *
- * Priority order for every setting:
- *   1. Value saved in settings.json (via the /settings UI)
- *   2. Environment variable / secret
- *   3. Built-in default (where applicable)
+ * Centralized, lazy access to environment variables & runtime settings.
+ * Zero hardcoded fallback passwords or predictable static production secrets.
  */
 
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { getSettings } from "./settings-store";
+import { logger } from "../lib/logger";
 
 export class MissingEnvVarError extends Error {
   constructor(public readonly key: string, hint?: string) {
@@ -25,63 +20,80 @@ export class MissingEnvVarError extends Error {
 
 function readEnv(key: string): string | undefined {
   const value = process.env[key];
-  return value && value.trim().length > 0 ? value : undefined;
+  return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function requireEnv(key: string, hint?: string): string {
-  const value = readEnv(key);
-  if (!value) {
-    console.warn(`[SERVER WARNING] Missing env var "${key}". Using fallback until configured in Settings.`);
-    if (key === 'GOOGLE_SERVICE_ACCOUNT_JSON') return '{}';
-    return `fallback_${key.toLowerCase()}`;
-  }
-  return value;
-}
+// Ephemeral per-process random secret ONLY for local dev/test when SESSION_SECRET is unset
+const DEV_EPHEMERAL_SECRET = crypto.randomBytes(48).toString("hex");
+let warnedDevSessionSecret = false;
 
 export const env = {
-  // --- Auth (simple env-based credentials, no user database in v1) ---
-  get adminUsername(): string {
-    return readEnv("ADMIN_USERNAME") ?? "123456";
+  /**
+   * Optional bootstrap admin credentials ONLY read from explicit env vars (never hardcoded defaults!).
+   */
+  get bootstrapAdminUsername(): string | undefined {
+    return readEnv("ADMIN_USERNAME");
   },
-  get adminPassword(): string {
-    return readEnv("ADMIN_PASSWORD") ?? "123456";
-  },
-  get appUsername(): string {
-    return readEnv("APP_USERNAME") ?? "12345";
-  },
-  get appPassword(): string {
-    return readEnv("APP_PASSWORD") ?? "12345";
-  },
-  get sessionSecret(): string {
-    return readEnv("SESSION_SECRET") ?? "court_session_secret_fallback_key";
+  get bootstrapAdminPassword(): string | undefined {
+    return readEnv("ADMIN_PASSWORD");
   },
 
-  // --- Google Sheets (acts as the database in v1) ---
-  // Settings UI takes precedence over env vars.
+  /**
+   * Cryptographic HMAC secret for session cookies.
+   * Never falls back to a public static string.
+   */
+  get sessionSecret(): string {
+    const explicit = readEnv("SESSION_SECRET");
+    if (explicit && explicit.length >= 32) {
+      return explicit;
+    }
+    if (explicit && explicit.length > 0 && process.env.NODE_ENV !== "production") {
+      return crypto.createHash("sha256").update(explicit).digest("hex");
+    }
+    if (process.env.NODE_ENV === "production") {
+      // In production, if SESSION_SECRET is missing or too short, derive deterministically ONLY if a strong private service key exists; otherwise throw!
+      const serviceKey = readEnv("SUPABASE_SERVICE_ROLE_KEY");
+      if (serviceKey && serviceKey.length >= 32) {
+        return crypto
+          .createHmac("sha256", serviceKey)
+          .update("court-session-signing-key-v2")
+          .digest("hex");
+      }
+      throw new MissingEnvVarError(
+        "SESSION_SECRET",
+        "يجب تعيين متغير البيئة SESSION_SECRET بقيمة سرية عشوائية لا تقل عن 32 حرفاً في بيئة الإنتاج.",
+      );
+    }
+    if (!warnedDevSessionSecret) {
+      warnedDevSessionSecret = true;
+      logger.warn(
+        "SESSION_SECRET is not set; using an ephemeral random secret for this development process.",
+      );
+    }
+    return DEV_EPHEMERAL_SECRET;
+  },
+
+  // --- Platform-level Google Sheets (used ONLY when explicitly authorized for platform admin diagnostics) ---
   get googleSpreadsheetId(): string {
     const stored = getSettings().googleSpreadsheetId;
     if (stored && stored.trim()) return stored.trim();
-    const val = readEnv("GOOGLE_SPREADSHEET_ID");
-    return val ? val.trim() : "";
+    return readEnv("GOOGLE_SPREADSHEET_ID") ?? "";
   },
+
   get googleServiceAccountJson(): Record<string, unknown> | null {
     try {
-      const fs = require("fs");
-      const path = require("path");
       const candidates = [
         path.resolve(process.cwd(), "service-account.json"),
         path.resolve(process.cwd(), "..", "..", "service-account.json"),
         path.resolve(process.cwd(), "artifacts", "api-server", "service-account.json"),
-        path.resolve(__dirname, "..", "..", "service-account.json"),
-        path.resolve(__dirname, "..", "..", "..", "service-account.json"),
       ];
       for (const p of candidates) {
         if (fs.existsSync(p)) {
-          return JSON.parse(fs.readFileSync(p, "utf-8"));
+          return JSON.parse(fs.readFileSync(p, "utf-8")) as Record<string, unknown>;
         }
       }
-    } catch (e) {
-      // Ignore filesystem errors and fallback to env var
+    } catch {
+      // Fall through to env var
     }
 
     const raw = readEnv("GOOGLE_SERVICE_ACCOUNT_JSON");
@@ -94,21 +106,18 @@ export const env = {
     }
     return null;
   },
+
   get googleSheetName(): string {
     const stored = getSettings().googleSheetName;
     if (stored && stored.trim()) return stored.trim();
     return readEnv("GOOGLE_SHEET_NAME") ?? "Sessions";
   },
 
-  // --- AI Settings (OpenRouter/Groq/OpenAI compatible) ---
-  // Settings UI takes precedence over env vars.
+  // --- AI Settings ---
   get aiApiKey(): string {
     const stored = getSettings().aiApiKey;
     if (stored && stored.trim()) return stored.trim();
-    return requireEnv(
-      "AI_API_KEY",
-      "Add your AI Provider API key (e.g. from OpenRouter) so the chat screen can extract session details.",
-    );
+    return readEnv("AI_API_KEY") ?? readEnv("OPENAI_API_KEY") ?? "";
   },
   get aiBaseUrl(): string {
     const stored = getSettings().aiBaseUrl;
@@ -130,7 +139,10 @@ export const env = {
   get supabaseKey(): string | undefined {
     const stored = getSettings().supabaseKey;
     if (stored && stored.trim()) return stored.trim();
-    return readEnv("SUPABASE_SERVICE_ROLE_KEY") ?? readEnv("SUPABASE_KEY") ?? readEnv("SUPABASE_ANON_KEY");
+    return readEnv("SUPABASE_SERVICE_ROLE_KEY") ?? readEnv("SUPABASE_KEY");
+  },
+  get supabaseServiceKey(): string {
+    return this.supabaseKey ?? "";
   },
   get supabaseTableName(): string {
     const stored = getSettings().supabaseTableName;
@@ -140,74 +152,51 @@ export const env = {
 
   // --- Scheduler ---
   get reminderCronExpression(): string {
-    return readEnv("REMINDER_CRON_EXPRESSION") ?? "*/10 * * * *";
+    return readEnv("REMINDER_CRON_EXPRESSION") ?? "*/15 * * * *";
   },
-  /**
-   * Secret token used to authenticate Vercel Cron Job requests.
-   * Set CRON_SECRET in your Vercel environment variables.
-   * Vercel automatically sends this as `Authorization: Bearer <CRON_SECRET>`.
-   */
   get cronSecret(): string | undefined {
     return readEnv("CRON_SECRET");
   },
-  /**
-   * Fixed UTC offset (hours) used to interpret Hijri session dates/times.
-   * Uses Mecca time (Asia/Makkah = UTC+3), identical to Asia/Riyadh.
-   * Saudi Arabia has no daylight-saving time, so the offset is always +3.
-   */
   get courtTimezoneOffsetHours(): number {
     const raw = readEnv("COURT_TIMEZONE_OFFSET_HOURS");
-    const parsed = raw ? Number(raw) : 3; // Mecca / Riyadh = UTC+3
+    const parsed = raw ? Number(raw) : 3;
     return Number.isFinite(parsed) ? parsed : 3;
   },
 
   get isProduction(): boolean {
     return process.env.NODE_ENV === "production";
   },
+  get isProd(): boolean {
+    return process.env.NODE_ENV === "production";
+  },
+  get isTest(): boolean {
+    return process.env.NODE_ENV === "test" || Boolean(process.env.VITEST);
+  },
 };
 
-/** Returns true only if every env var Google Sheets access needs is present, without throwing. */
 export function isGoogleSheetsConfigured(): boolean {
   const stored = getSettings().googleSpreadsheetId;
   const hasSpreadsheetId = Boolean(
     (stored && stored.trim()) || readEnv("GOOGLE_SPREADSHEET_ID"),
   );
-  
-  let hasServiceAccount = Boolean(readEnv("GOOGLE_SERVICE_ACCOUNT_JSON"));
-  if (!hasServiceAccount) {
-    try {
-      const fs = require("fs");
-      const path = require("path");
-      const candidates = [
-        path.resolve(process.cwd(), "service-account.json"),
-        path.resolve(process.cwd(), "..", "..", "service-account.json"),
-        path.resolve(process.cwd(), "artifacts", "api-server", "service-account.json"),
-        path.resolve(__dirname, "..", "..", "service-account.json"),
-        path.resolve(__dirname, "..", "..", "..", "service-account.json"),
-      ];
-      hasServiceAccount = candidates.some((p) => fs.existsSync(p));
-    } catch(e) {}
-  }
-  
-  return Boolean(hasSpreadsheetId && hasServiceAccount);
+  return Boolean(hasSpreadsheetId && env.googleServiceAccountJson);
 }
 
-/** Returns true only if login credentials are configured (or dev fallbacks are active), without throwing. */
 export function isAuthConfigured(): boolean {
-  return true; // We now have default credentials "5128" if env vars are missing
+  return Boolean(isSupabaseConfigured() || !env.isProduction);
 }
 
-/** Returns true only if the AI API key is present (settings or env var), without throwing. */
 export function isAiConfigured(): boolean {
-  const stored = getSettings().aiApiKey;
-  return Boolean((stored && stored.trim()) || readEnv("AI_API_KEY"));
+  return Boolean(env.aiApiKey && env.aiApiKey.trim().length > 0);
 }
 
-/** Returns true only if Supabase URL and Key are configured, without throwing. */
 export function isSupabaseConfigured(): boolean {
   const settings = getSettings();
   const hasUrl = Boolean((settings.supabaseUrl && settings.supabaseUrl.trim()) || readEnv("SUPABASE_URL"));
-  const hasKey = Boolean((settings.supabaseKey && settings.supabaseKey.trim()) || readEnv("SUPABASE_SERVICE_ROLE_KEY") || readEnv("SUPABASE_KEY") || readEnv("SUPABASE_ANON_KEY"));
+  const hasKey = Boolean(
+    (settings.supabaseKey && settings.supabaseKey.trim()) ||
+      readEnv("SUPABASE_SERVICE_ROLE_KEY") ||
+      readEnv("SUPABASE_KEY"),
+  );
   return hasUrl && hasKey;
 }
-

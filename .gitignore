@@ -2,6 +2,8 @@
 
 # compiled output
 dist
+artifacts/api-server/dist
+artifacts/api-server/dist-test
 tmp
 out-tsc
 *.tsbuildinfo
@@ -48,16 +50,18 @@ Thumbs.db
 .cache/
 .local/
 
-# Secrets and local runtime settings
+# Secrets and local runtime data
 service-account.json
 settings.json
 artifacts/api-server/settings.json
+.data/
+local_sessions.json
+artifacts/api-server/local_sessions.json
 *.env
 *.pem
 
-# Scratch & test scripts
+# Scratch & temporary files
 scratch_*
 test-*
 test_*
 artifacts/api-server/scratch_hf.cjs
-

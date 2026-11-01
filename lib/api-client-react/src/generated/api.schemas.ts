@@ -24,13 +24,27 @@ export interface AuthUser {
   username: string;
   id?: string;
   role?: string;
+  office_id?: string;
+  office_role?: string;
+  permissions?: {
+    canAccessFinances?: boolean;
+    canEditCases?: boolean;
+    canManageSettings?: boolean;
+  };
   display_name?: string | null;
   email?: string | null;
   status?: 'active' | 'suspended';
   subscription_end_date?: string | null;
   subscriptionWarning?: string | null;
   daysRemaining?: number | null;
+  plan_tier?: 'plus' | 'pro' | string;
+  billing_cycle?: 'monthly' | 'annual' | string;
+  ai_quota_limit?: number;
+  ai_usage_count?: number;
+  ai_quota_period?: string;
+  ai_renewal_date?: string | null;
   has_custom_sheets?: boolean;
+  has_google_service?: boolean;
   google_spreadsheet_id?: string | null;
   google_sheet_name?: string | null;
 }
@@ -156,7 +170,7 @@ export interface SessionUpdate {
 }
 
 export interface Session {
-  /** 1-based row index within the Google Sheet */
+  /** Stable unique integer ID of the session record */
   id: number;
   /** @nullable */
   caseNumber: string | null;
@@ -223,4 +237,3 @@ export interface SessionReport {
 export type ListSessionsParams = {
 status?: SessionStatus;
 };
-

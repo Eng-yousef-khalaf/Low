@@ -14,10 +14,10 @@
 import moment from "moment-hijri";
 import { env } from "../config/env";
 
-const ARABIC_INDIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
-
 function normalizeDigits(input: string): string {
-  return input.replace(/[٠-٩]/g, (d) => String(ARABIC_INDIC_DIGITS.indexOf(d)));
+  return input
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
 }
 
 export interface HijriDate {

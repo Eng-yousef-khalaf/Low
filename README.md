@@ -1,125 +1,215 @@
-# ⚖️ المنظومة القضائية السحابية لإدارة المحاكم والمكاتب القانونية
-### Cloud Legal & Court Session Management SaaS Platform
+<div align="center">
+
+# ⚖️ المنظومة السحابية المتكاملة لإدارة مكاتب المحاماة والجلسات القضائية
+### Enterprise Multi-Tenant Legal Practice & Court Session Management SaaS
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Platform-Legal%20SaaS-093A2A?style=for-the-badge&logo=scales&logoColor=white" alt="Platform" />
-  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
-  <img src="https://img.shields.io/badge/Node.js-Express%205-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node" />
-  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Database-Google%20Sheets%20%7C%20Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="DB" />
-  <img src="https://img.shields.io/badge/AI-Extraction%20Engine-B88A3B?style=for-the-badge&logo=openai&logoColor=white" alt="AI" />
+  <a href="https://github.com/Eng-yousef-khalaf/Low">
+    <img src="https://img.shields.io/badge/Release-v2.0%20Enterprise-093A2A?style=for-the-badge&logo=scales&logoColor=white" alt="Version" />
+  </a>
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/Express-5.x-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node & Express 5" />
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5.9" />
+  <img src="https://img.shields.io/badge/Storage-Supabase%20%2B%20Google%20Sheets-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="Storage" />
+  <img src="https://img.shields.io/badge/Security%20Tests-6%2F6%20Passing-10B981?style=for-the-badge&logo=shield&logoColor=white" alt="Tests" />
 </p>
 
----
+<p align="center">
+  <b>تصميم وهندسة وتطوير: المهندس يوسف خلف (Eng. Yousef A. Khalaf)</b><br/>
+  <a href="https://github.com/Eng-yousef-khalaf">
+    <img src="https://img.shields.io/badge/GitHub-Eng--yousef--khalaf-181717?style=flat-square&logo=github" alt="GitHub" />
+  </a>
+  <a href="https://yousef-khalaf.vercel.app/">
+    <img src="https://img.shields.io/badge/Portfolio-yousef--khalaf.vercel.app-B88A3B?style=flat-square&logo=vercel&logoColor=white" alt="Portfolio" />
+  </a>
+</p>
 
-## 📖 نبذة عن المنصة (About the Project)
-
-نظام سحابي متكامل واحترافي مصمم خصيصاً للمحامين، المكاتب، والشركات القانونية في مختلف الدول والأنظمة القضائية العربية (فلسطين، الأردن، مصر، السعودية، دول الخليج، وغيرها).
-
-يقوم النظام بتحويل الإشعارات والرسائل النصية (`SMS`) الخام الواردة من المحاكم إلى بيانات منظمة ومفهرسة تلقائياً باستخدام تقنيات الذكاء الاصطناعي، مع جدولة التنبيهات، تتبع المهل الزمنية، وإدارة شاملة للجلسات، الوكالات، الأحكام القضائية، والمهام اليومية.
-
----
-
-## ✨ المميزات الرئيسية (Key Features)
-
-### 1. 🧠 التحليل الذكي لإشعارات المحاكم (AI Court SMS Extraction)
-* استخراج فوري وتلقائي لكافة تفاصيل الجلسة:
-  * **رقم القضية** وتصنيفها.
-  * **أطراف الدعوى** (المدعي، المدعى عليه، أو المحيل والمحال إليه).
-  * **المحكمة والدائرة القضائية** (محاكم الصلح، البداية، الاستئناف، التمييز، المحاكم الشرعية والتجارية والعمالية).
-  * **تاريخ ووقت الجلسة** بدعم كامل للتقويمين **الميلادي** و**الهجري**.
-  * **نوع الجلسة وملاحظاتها** (مرافعة، استماع، نطق بالحكم).
-
-### 2. 📅 إدارة الجلسات والعد التنازلي (Hearings & Sessions Management)
-* فلترة فورية للجلسات: (اليوم، قادمة، منتهية، ملغية).
-* شارات توقيت تنازلي ذكية توضح الأيام والساعات المتبقية لكل جلسة.
-* نظام تذكير تلقائي مجدول يرسل تنبيهات استباقية (قبل 24 ساعة وقبل 6 ساعات).
-
-### 3. 🛡️ بنية سحابية متعددة المستويات (SaaS Architecture)
-* **بوابة المحامي (Lawyer Workspace):** مساحة عمل مستقلة للمحامي لإدارة قضاياه وجلساته وتقاريره اليومية.
-* **بوابة المشرف العام (Admin Portal Gateway):** لوحة تحكم عليا حصرية لإدارة حسابات المشتركين، تحديد الأدوار (`Admin` / `Staff - المحامي`)، وتخصيص قواعد البيانات وملفات Google Sheets لكل مشترك بشكل منفصل ومنعزل تماماً.
-
-### 4. 📂 موديولات قانونية شاملة (Legal Modules)
-* **سجل الوكالات الشرعية والقانونية (`/poa`):** أرشفة الوكالات، أنواعها، وتواريخ سريانها وانتهائها.
-* **سجل الأحكام والقرارات القضائية (`/judgments`):** متابعة منطوق الأحكام النهائية والابتدائية وأرقام الإعلامات.
-* **إدارة المهام والتكليفات القانونية (`/tasks`):** تنظيم أولويات العمل ومتابعة المهل مع زر إرسال تنبيهات واتساب فورية.
-* **تقارير الجلسات الاحترافية (`/reports`):** توليد تقارير رسمية جاهزة للطباعة والتصدير بصيغة `PDF`.
-
-### 5. 🎨 تصميم راقٍ وعصري (Premium Legal Design)
-* واجهة مستخدم مبنية بأحدث معايير التصميم العالمي (أخضر زمردي داكن `#093A2A` مع لمسات برونزية وذهبية ملكية `#B88A3B`).
-* دعم كامل للاتجاه من اليمين إلى اليسار (`RTL`) واللغة العربية بأفضل الخطوط.
-* تأثيرات الزجاج المصقول الحديثة (**Frosted Glassmorphism**) مع دعم الوضعين الداكن والفاتح (`Dark / Light Mode`).
+</div>
 
 ---
 
-## 🔑 بيانات الدخول الافتراضية (Default Credentials)
+## 📖 نبذة تنفيذية (Overview)
 
-| البوابة | الرابط المحلي | اسم المستخدم | كلمة المرور | الصلاحية |
-| :--- | :--- | :---: | :---: | :---: |
-| **بوابة المحامي** | [http://localhost:5173/login](http://localhost:5173/login) | **`12345`** | **`12345`** | مساحة عمل المحامي |
-| **بوابة المشرف العام** | [http://localhost:5173/admin/login](http://localhost:5173/admin/login) | **`123456`** | **`123456`** | إدارة المنصة والمستخدمين |
+**منظومة سحابية متكاملة متعددة المكاتب (`Multi-Tenant Legal SaaS`)** مصممة خصيصاً لمكاتب المحاماة والشركات القانونية والمحامين الممارسين في الأنظمة القضائية العربية.
+
+تجمع المنظومة بين **التحليل الذكي لرسائل وإشعارات المحاكم بالذكاء الاصطناعي**، و**ملف القضية المركزي الموحد**، و**إدارة الموكلين والأتعاب المالية**، و**جدولة الجلسات مع كشف التعارضات الزمنية**، و**التنبيهات الاستباقية عبر واتساب**، ضمن بنية أمنية صارمة تعزل بيانات كل مكتب محاماة بشكل كامل وتدعم التدقيق والنسخ الاحتياطي واسترجاع المحذوفات.
 
 ---
 
-## 🏗️ هيكلية المشروع (Architecture & Tech Stack)
+## 🏛️ المعمارية الهندسية للنظام (System Architecture)
 
+```mermaid
+flowchart TD
+  subgraph Clients["واجهات المستخدم (React 19 + RTL + Dark/Light)"]
+    LP["بوابة المكتب والفريق القانوني"]
+    AP["بوابة المشرف العام للمنصة (/admin)"]
+  end
+
+  subgraph Security["طبقة الحماية والعزل (Express 5 Security Layer)"]
+    AUTH["جلسات موقعة HMAC-SHA256 + إبطال فوري"]
+    RBAC["صلاحيات متعددة المستويات (Platform & Office RBAC)"]
+    ISO["عزل صارم للمكاتب (Strict office_id Isolation)"]
+  end
+
+  subgraph Engines["المحركات والخدمات الأساسية"]
+    AI["محرك الذكاء الاصطناعي + حجز ذري للحصة الشهرية"]
+    CASE["ملف القضية الموحد + إصدارات المستندات + المالية"]
+    SHEET["مزامنة Google Sheets بمعرّفات ثابتة وقفل تزامن"]
+    CRON["مجدول تنبيهات واتساب المعزول (24 ساعة / 6 ساعات)"]
+    AUD["سجل التدقيق + سلة المحذوفات + النسخ الاحتياطي"]
+  end
+
+  subgraph Data["طبقة التخزين الدائم"]
+    SUPA[("Supabase PostgreSQL")]
+    GS[("Per-Office Google Sheets")]
+  end
+
+  Clients --> AUTH --> RBAC --> ISO
+  ISO --> AI & CASE & SHEET & CRON & AUD
+  AI & CASE & AUD --> SUPA
+  SHEET & CRON --> GS
 ```
+
+---
+
+## ✨ الوحدات والمميزات الرئيسية (Core Modules & Features)
+
+### 1. 🧠 التحليل الذكي لرسائل المحاكم وإدارة الجلسات (`/chat` & `/sessions`)
+* **استخراج فوري بالذكاء الاصطناعي** لرقم القضية، المحكمة، الدائرة، أطراف الدعوى، نوع الجلسة، والتاريخ الهجري/الميلادي والوقت من رسائل المحكمة النصية (`SMS`) مع محرك احتياطي ذكي (`Fallback Extractor`).
+* **إضافة يدوية مستقلة للجلسات** تعمل بكفاءة كاملة حتى بدون استخدام الذكاء الاصطناعي.
+* **تقويم الفريق وكشف تعارض المواعيد (`Conflict Detection`):** عرض جدولي وتقويمي حسب المحامي المكلف مع تنبيه فوري عند تداخل مواعيد جلستين لنفس المحامي.
+* **التقارير الرسمية للجلسات (`/reports`):** إعداد وتصدير تقارير الجلسات الاحترافية بصيغة `PDF` جاهزة للطباعة ومشاركتها مع الموكلين.
+
+### 2. 🗂️ ملف القضية الموحد وإصدارات المستندات (`/cases`)
+* ملف مركزي يربط **الموكل، الجلسات، المهام، الأحكام، المستندات، وكشف الحساب المالي** بمعرّف قضية ثابت.
+* **أرشفة المستندات وتعدد الإصدارات (`Document Versioning`):** حفظ المذكرات وصكوك الأحكام والعقود مع تتبع رقم الإصدار وتاريخ الرفع والمستخدم الرافع.
+
+### 3. 👥 إدارة الموكلين والشؤون المالية والأتعاب (`/clients`)
+* ملفات مستقلة للأفراد والشركات تشمل بيانات الهوية/السجل التجاري والتواصل وجميع القضايا المرتبطة.
+* **دفتر الأستاذ المالي للقضايا:** تسجيل العقود، الدفعات المحصلة، المصروفات القضائية، والفواتير مع احتساب فوري للمتبقي وصلاحيات وصول مخصصة للمحاسب ومدير المكتب.
+
+### 4. 📜 الوكالات الشرعية، الأحكام القضائية، والمهام (`/poa`, `/judgments`, `/tasks`)
+* **سجل الوكالات الشرعية (`/poa`):** متابعة سريان الوكالات وتنبيهات قرب انتهائها مع طابور مزامنة محلي معزول لكل حساب (`Scoped Pending Sync Queue`) يحفظ المدخلات بأمان عند انقطاع الاتصال دون ضياعها.
+* **سجل الأحكام القضائية (`/judgments`):** توثيق صكوك الأحكام الابتدائية والنهائية وتصنيفها (لصالح المكتب / ضد) مع ربطها بالمحامي المكلف والقضية.
+* **إدارة المهام القانونية (`/tasks`):** إسناد المهام لأعضاء فريق المكتب الفعليين مع تتبع تواريخ الاستحقاق الهجرية والميلادية والأولويات.
+
+### 5. 🏢 إدارة المكتب وتعدد الأدوار والصلاحيات (`/team`)
+* فصل كامل بين **مشرف المنصة العام (`Platform Admin`)** و**مدير المكتب (`Office Manager`)** وأعضاء المكتب:
+  * **مدير المكتب:** إشراف كامل، إدارة الفريق، المالية، الإعدادات، وسجل التدقيق والنسخ الاحتياطي.
+  * **محامٍ ممارس:** متابعة القضايا والجلسات والمذكرات المسندة.
+  * **مساعد قانوني:** جدولة المواعيد وإدخال البيانات ومتابعة المهام.
+  * **محاسب مالي:** إدارة الأتعاب والدفعات والمصروفات والتقارير المالية فقط.
+
+### 6. 🛡️ بوابة المشرف العام وإدارة الاشتراكات (`/admin`)
+* إدارة حسابات المكاتب وباقات الاشتراك (`Plus` و `Pro`) بنظام إضافة متدرج من 3 خطوات وملخص مراجعة قبل الحفظ ولوحة تحكم جانبية مستقلة.
+* **حصة ذكاء اصطناعي شهرية معزولة لكل مشترك** مع حجز ذري للرصيد (`Atomic Quota Reservation`) وتجديد شهري تلقائي بتوقيت الرياض.
+* تخصيص ملفات اعتماد `Google Service Account` ومعرّف جدول مستقل لكل مكتب محاماة.
+
+### 7. 🕵️ التدقيق، سلة المحذوفات، والنسخ الاحتياطي (`/api/audit`)
+* **سجل تدقيق شامل (`Audit Trail`):** توثيق كافة عمليات الإضافة والتعديل والحذف وتغييرات الصلاحيات.
+* **الحذف الآمن القابل للاسترجاع (`Soft Delete & Restore`):** إمكانية استعادة الجلسات أو الوكالات أو المهام أو الأحكام أو القضايا أو العملاء المحذوفين بالخطأ.
+* **النسخ الاحتياطي الموثق (`JSON Snapshot & Verification`):** تصدير نسخة احتياطية كاملة لبيانات المكتب وفحص سلامتها ومطابقتها للمخطط المعتمد.
+
+---
+
+## 🔒 ركائز الأمان والاعتمادية الهندسية (Security & Engineering Standards)
+
+| المجال الأمني والهندسي | الآلية المطبقة في المنظومة |
+| :--- | :--- |
+| **توثيق الجلسات (`Session Auth`)** | رموز جلسات موقعة خوارزمياً بـ `HMAC-SHA256` داخل كوكيز `HttpOnly` مع مقارنة ثابتة الزمن `timingSafeEqual` ورفض تام لأي كوكي غير موقعة. |
+| **الإبطال الفوري للصلاحيات** | بصمة جلسة ديناميكية (`Session Fingerprint`) تبطل الجلسات النشطة فوراً عند تغيير الدور أو إيقاف الحساب أو تحديث كلمة المرور أو الحذف. |
+| **العزل الصارم للمكاتب (`Multi-Tenancy`)** | كل عملية قراءة أو كتابة أو تنبيه مقيدة بـ `office_id` الخاص بالمستخدم الموثق، مع منع التحول التلقائي لأي جدول عام غير مصرح به. |
+| **سلامة البيانات والتزامن** | معرّفات سجلات ثابتة مستقلة عن رقم الصف في الشيت (`RowMeta`) مع قفل تزامن متسلسل (`withSheetLock`) ومنع تكرار الطلبات (`Idempotency`). |
+| **التحقق من المدخلات والتواريخ** | مخططات `Zod` صارمة بالخادم، دعم كامل للأرقام العربية الشرقية (`٠-٩`)، والتحقق الدقيق من نطاقات التقويمين الهجري والميلادي. |
+| **حماية مسارات الجدولة (`Cron`)** | جدولة متكررة تتوافق مع نافذتي 24 ساعة و6 ساعات، محمية بمفتاح `CRON_SECRET` إلزامي في بيئة الإنتاج مع عدم تسريب تفاصيل القضايا في السجلات التقنية. |
+
+---
+
+## 📂 هيكلية المستودع (Repository Structure)
+
+```text
 Low/
-├── api/                               # معالجات خادم Vercel Serverless
+├── api/                                     # حزم Vercel Serverless الجاهزة للنشر السحابي
 ├── artifacts/
-│   ├── api-server/                    # خادم الـ API والواجهة الخلفية (Express 5, Node.js)
-│   │   ├── src/config/                # إدارة الإعدادات والمفاتيح
-│   │   ├── src/routes/                # مسارات الـ REST API (Auth, Sessions, Tasks, etc.)
-│   │   ├── src/services/              # خدمات التكامل (Google Sheets, Supabase, AI, PDF)
-│   │   └── src/utils/                 # محركات التقويم الهجري والميلادي والجدولة
-│   └── court-session-management/      # تطبيق الواجهة الأمامية (React 19 + Vite)
-│       ├── src/components/            # مكونات الواجهة وقوالب التصميم
-│       ├── src/pages/                 # صفحات التطبيق (Dashboard, Sessions, POA, Admin)
-│       └── src/lib/                   # أدوات مساعدة وتكامل React Query
+│   ├── api-server/                          # الخادم الخلفي (Node.js, Express 5, TypeScript)
+│   │   ├── src/__tests__/                   # اختبارات التكامل والأمان وعزل المكاتب
+│   │   ├── src/config/                      # إدارة البيئة ومخزن الإعدادات الدائم
+│   │   ├── src/lib/                         # معالج الأخطاء الموحد بأرقام مرجعية والسجلات
+│   │   ├── src/middlewares/                 # التوثيق، فحص الاشتراكات، ومحدد المعدل المركزي
+│   │   ├── src/routes/                      # مسارات الـ API (Auth, Cases, Clients, Sessions, POA, Tasks, Judgments, Team, Audit, Cron)
+│   │   ├── src/scheduler/                   # مجدول التنبيهات المعزول لكل مكتب
+│   │   ├── src/services/                    # خدمات الأعمال والتكامل (Supabase, Google Sheets, AI, WhatsApp)
+│   │   └── src/utils/                       # تطبيع التواريخ الهجرية/الميلادية وأقفال التزامن
+│   └── court-session-management/            # تطبيق الواجهة الأمامية (React 19, Vite 6, Tailwind CSS)
+│       ├── src/components/                  # المكونات المشتركة (DateField, TeamSelect, ThemeProvider, Sidebar)
+│       ├── src/lib/                         # أدوات التحقق والتخزين المحلي المعزول لكل حساب
+│       └── src/pages/                       # واجهات النظام وبوابة الإدارة
 ├── lib/
-│   ├── api-client-react/              # خطافات React Query المولدة تلقائياً
-│   ├── api-spec/                      # توثيق OpenAPI Spec
-│   └── api-zod/                       # مخططات التحقق من البيانات (Zod Validators)
-└── pnpm-workspace.yaml                # إعدادات الـ Monorepo
+│   ├── api-client-react/                    # عميل الـ API وخطافات React Query
+│   ├── api-spec/                            # مواصفات OpenAPI
+│   └── api-zod/                             # مكتبة التحقق المشتركة (Zod)
+├── vercel.json                              # إعدادات التوجيه وجدولة التنبيهات على Vercel
+└── package.json                             # أوامر البناء والفحص والاختبار الموحدة
 ```
 
 ---
 
-## 🚀 التشغيل المحلي (Quick Start)
+## ⚙️ متغيرات البيئة الأساسية (Environment Configuration)
 
-### 1. المتطلبات الأساسية
-* **Node.js** (إصدار 20 أو أحدث، يُفضل v24).
-* مدير الحزم **pnpm** أو **npx**.
+أنشئ ملف `.env` في جذر المشروع (أو أضف المتغيرات في إعدادات Vercel للإنتاج):
 
-### 2. تثبيت التبعيات
+| المتغير | الوصف | إلزامي في الإنتاج؟ |
+| :--- | :--- | :---: |
+| `SESSION_SECRET` | مفتاح سري عشوائي قوي (32 حرفاً فأكثر) لتوقيع جلسات الدخول `HMAC-SHA256` | نعم |
+| `SUPABASE_URL` | رابط مشروع قاعدة البيانات في Supabase | نعم |
+| `SUPABASE_SERVICE_ROLE_KEY` | مفتاح الخدمة السري في Supabase لإدارة الحسابات والإعدادات الدائمة | نعم |
+| `CRON_SECRET` | رمز سري لتوثيق استدعاءات مجدول التنبيهات `/api/cron/reminders` | نعم |
+| `AI_INTEGRATIONS_OPENAI_API_KEY` | مفتاح مزود الذكاء الاصطناعي (`Groq` / `Gemini` / `OpenAI`) | اختياري (أو من لوحة الإدارة) |
+
+---
+
+## 🚀 التشغيل السريع والاختبار والبناء (Quick Start & CI Commands)
+
+### 1. المتطلبات
+* **Node.js** `v20+` (مختبر بالكامل على `Node.js v22+`).
+* مدير الحزم **pnpm**.
+
+### 2. تثبيت الحزم
 ```bash
-npx --yes pnpm install
+pnpm install
 ```
 
-### 3. تشغيل النظام (الواجهة الأمامية والخلفية معاً)
+### 3. فحص الأنواع وتشغيل الاختبارات الأمنية
 ```bash
-# تشغيل خادم الـ API (المنفذ 5000)
-npx --yes pnpm --filter @workspace/api-server run build
-node artifacts/api-server/dist/index.mjs
+# فحص TypeScript الشامل للواجهة والخادم والحزم المشتركة
+pnpm run typecheck
 
-# تشغيل واجهة المستخدم (المنفذ 5173) في نافذة أخرى
-npx --yes pnpm --filter @workspace/court-session-management run dev
+# تشغيل حزمة اختبارات الأمان وعزل المكاتب والاسترجاع
+pnpm run test
 ```
 
-افتح المتصفح على:
-👉 **[http://localhost:5173/](http://localhost:5173/)**
+### 4. البناء الكامل للإنتاج (يشغّل الاختبارات تلقائياً قبل اعتماد البناء)
+```bash
+pnpm run build
+```
+
+### 5. التشغيل المحلي للتطوير
+```bash
+pnpm run dev
+```
 
 ---
 
-## 🔒 الأمان وحماية البيانات (Security & Permissions)
+## 👨‍💻 المؤلف وحقوق التطوير (Author)
 
-* **عزل الحسابات (Data Isolation):** كل مستخدم/محامٍ يستطيع الارتباط بقاعدة بيانات أو Google Sheet مستقلة تماماً لا يطلع عليها غيره.
-* **حماية المسارات (Guarded Routes):** مسارات الإدارة محمية برمجياً بطبقتين: `AdminGuard` على الواجهة و `requireAdmin` في الواجهة الخلفية.
-* **الجلسات المشفرة:** ملفات تعريف الارتباط (`Cookies`) موقعة ومشفرة عبر `cookie-parser` مع حماية `HttpOnly` و `SameSite`.
+تم تصميم وهندسة وتطوير هذه المنظومة بالكامل بواسطة:
+
+**المهندس يوسف خلف — Eng. Yousef A. Khalaf**
+* 🔗 **GitHub:** [@Eng-yousef-khalaf](https://github.com/Eng-yousef-khalaf)
+* 🌐 **الموقع الشخصي (Portfolio):** [yousef-khalaf.vercel.app](https://yousef-khalaf.vercel.app/)
 
 ---
 
-<p align="center">
-  <b>تم التطوير والإعداد بواسطة المهندس يوسف خلف</b><br>
-  Developed with ❤️ for Modern Arab Law Practices
-</p>
+<div align="center">
+  <sub>© 2026 Eng. Yousef A. Khalaf — All Rights Reserved. Built for Modern Legal Practice Excellence.</sub>
+</div>
