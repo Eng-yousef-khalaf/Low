@@ -12,16 +12,11 @@
   "scripts": {
     "dev": "pnpm run --parallel --filter @workspace/api-server --filter @workspace/court-session-management dev",
     "test": "pnpm --filter @workspace/api-server run test",
-    "build": "pnpm run test && pnpm -r --if-present run build && node scripts/copy-dist.js",
-    "typecheck:libs": "tsc --build",
+    "build": "pnpm run test && pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/court-session-management run build && node scripts/copy-dist.js",
+    "typecheck:libs": "tsc --build --force",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "core-js"
-    ]
-  },
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
